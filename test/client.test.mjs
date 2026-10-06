@@ -946,12 +946,13 @@ test('a real straight pawn move travels between measured anchors and duplicate u
   game.board[7] = { ...pathTile };
   game.board[12] = { ...TILE_CATALOG.find(tile => tile.kind === 'tree') };
   const initial = animationRoom(game);
-  const client = browser({ geometry: {
+  const geometry = {
     '[data-cell="2"] [data-pawn-id="p0"]': rect(148, 28),
     '[data-cell="12"] [data-pawn-id="p0"]': rect(148, 188),
     '[data-cell="2"]': rect(120, 0, 80, 80),
     '[data-cell="12"]': rect(120, 160, 80, 80),
-  } });
+  };
+  const client = browser({ geometry });
   client.accept(initial);
   assert.equal(effectTags(client.html, 'pawn-flight').length, 0);
   game = applyAction(game, 'p0', { type: 'move', index: 12 });
@@ -969,6 +970,12 @@ test('a real straight pawn move travels between measured anchors and duplicate u
   assert.doesNotMatch(client.motionStyles.get(id).cssText, /NaN|undefined/);
   assert.match(client.motionStyles.get(id).cssText, /M 160 40 L/);
   assert.match(client.motionStyles.get(id).cssText, /160 200"\)/);
+  geometry['[data-cell="2"]'] = rect(120, 70, 80, 80);
+  geometry['[data-cell="12"]'] = rect(120, 230, 80, 80);
+  geometry['[data-cell="12"] [data-pawn-id="p0"]'] = rect(148, 258);
+  client.render();
+  assert.match(client.motionStyles.get(id).cssText, /M 160 110 L/, 'A layout shift must keep the route anchored to the board.');
+  assert.match(client.motionStyles.get(id).cssText, /160 270"\)/);
   client.advance(100);
   client.accept(structuredClone(moved));
   client.accept(initial);

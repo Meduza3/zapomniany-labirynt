@@ -140,11 +140,12 @@ function trackGameMotions(previous, next) {
     }
     for (const color of player.flowers || []) {
       if ((before.flowers || []).includes(color)) continue;
-      const garden = previous.game.board.find(tile => tile?.kind === 'garden' && tile.color === color);
+      const sourceCell = previous.game.board.findIndex(tile => tile?.kind === 'garden' && tile.color === color);
+      const garden = previous.game.board[sourceCell];
       const from = garden && motionRect(`.garden-flowers[data-color="${color}"] .garden-flower-token:last-child`);
       if (!from) continue;
       const target = player.id === next.you ? `.hand-flower[data-color="${color}"] .hand-flower-token` : `.player-card[data-player-id="${CSS.escape(player.id)}"] .flower[data-color="${color}"]`;
-      travelEffects.set(`flower-${player.id}-${color}`, { type: 'flower', player: { ...player }, color, from, target, startedAt, duration: 420 });
+      travelEffects.set(`flower-${player.id}-${color}`, { type: 'flower', player: { ...player }, color, from, target, sourceCell, origin: motionRect(`[data-cell="${sourceCell}"]`), startedAt, duration: 420 });
     }
   }
   const beforeMe = previous.game.players.find(player => player.id === next.you);
@@ -177,7 +178,11 @@ function positionTravelEffects() {
     const element = main.querySelector(`[data-motion-id="${CSS.escape(id)}"]`);
     const target = motionRect(item.target);
     if (!element || !target) continue;
-    const sourceX = item.from.left + item.from.width / 2, sourceY = item.from.top + item.from.height / 2;
+    const currentOrigin = item.origin && motionRect(`[data-cell="${item.type === 'pawn' ? item.fromCell : item.sourceCell}"]`);
+    const origin = currentOrigin || item.origin;
+    const sourceX = currentOrigin ? currentOrigin.left + (item.from.left + item.from.width / 2 - item.origin.left) * currentOrigin.width / item.origin.width : item.from.left + item.from.width / 2;
+    const sourceY = currentOrigin ? currentOrigin.top + (item.from.top + item.from.height / 2 - item.origin.top) * currentOrigin.height / item.origin.height : item.from.top + item.from.height / 2;
+    const sourceScale = item.from.width / target.width * (currentOrigin ? currentOrigin.width / item.origin.width : 1);
     const targetX = target.left + target.width / 2, targetY = target.top + target.height / 2;
     let path;
     if (item.type === 'pawn') {
@@ -185,7 +190,7 @@ function positionTravelEffects() {
       if (!destination) continue;
       const horizontal = Math.floor(item.fromCell / 5) === Math.floor(item.toCell / 5);
       const forward = item.toCell > item.fromCell;
-      const origin = item.origin, lift = target.height * .185;
+      const lift = target.height * .185;
       const exitX = horizontal ? forward ? origin.right : origin.left : origin.left + origin.width / 2;
       const exitY = horizontal ? origin.top + origin.height / 2 + lift : (forward ? origin.bottom : origin.top) + lift;
       const entryX = horizontal ? forward ? destination.left : destination.right : destination.left + destination.width / 2;
@@ -195,7 +200,7 @@ function positionTravelEffects() {
       path = `M ${sourceX} ${sourceY} Q ${(sourceX + targetX) / 2} ${Math.min(sourceY, targetY) - 65} ${targetX} ${targetY}`;
     }
     const elapsed = Math.max(0, Math.round(performance.now() - item.startedAt));
-    element.style.cssText = `visibility:visible;width:${target.width}px;height:${target.height}px;offset-path:path("${path}");--travel-duration:${item.duration}ms;--travel-delay:-${elapsed}ms;--travel-scale:${item.from.width / target.width};${item.type === 'flower' ? `--token-shadow:${gardenTokenColors[item.color][1]};` : ''}`;
+    element.style.cssText = `visibility:visible;width:${target.width}px;height:${target.height}px;offset-path:path("${path}");--travel-duration:${item.duration}ms;--travel-delay:-${elapsed}ms;--travel-scale:${sourceScale};${item.type === 'flower' ? `--token-shadow:${gardenTokenColors[item.color][1]};` : ''}`;
   }
 }
 
