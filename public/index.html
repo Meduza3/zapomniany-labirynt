@@ -1,0 +1,40 @@
+<!doctype html>
+<html lang="pl">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#253e20">
+  <meta name="description" content="Zapomniany Labirynt">
+  <title>Zapomniany Labirynt</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='14' fill='%23183f32'/%3E%3Cpath d='M15 49V15h34v34H29V29h8v10' fill='none' stroke='%23e5d68b' stroke-width='6'/%3E%3C/svg%3E">
+  <link rel="preload" href="fonts/BreeSerif-Regular.ttf" as="font" type="font/ttf" crossorigin>
+  <link rel="preload" href="fonts/Nunito.ttf" as="font" type="font/ttf" crossorigin>
+  <link rel="stylesheet" href="style.css">
+  <script src="config.js"></script>
+  <script type="module" src="app.js"></script>
+</head>
+<body>
+  <a class="skip-link" href="#main">Przejdź do gry</a>
+  <header class="site-header">
+    <a class="brand" href="./" aria-label="Zapomniany Labirynt, strona główna"><span class="brand-mark" aria-hidden="true"><svg viewBox="0 0 40 40"><path d="M8 32V8h24v24H18V18h6v7"/></svg></span><span>Zapomniany<br><strong>Labirynt</strong></span></a>
+    <div class="header-actions"><span id="connection" class="connection" role="status" hidden><i></i><span></span></span><button class="text-button" id="rules-open" type="button"><span aria-hidden="true">▤</span> Jak grać</button></div>
+  </header>
+  <main id="main" tabindex="-1"></main>
+  <div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
+  <dialog id="rules-dialog" aria-labelledby="rules-title">
+    <div class="dialog-heading"><h2 id="rules-title">Zasady gry</h2><button class="icon-button" data-close-dialog type="button" aria-label="Zamknij instrukcję">×</button></div>
+    <div id="rules-content">
+    <ol class="rules-list">
+      <li><strong>Zdobądź trzy różne kwiaty.</strong> Wejdź do ogródka każdego przeciwnika. Trzeci zdobyty kwiat kończy grę zwycięstwem — nie musisz wracać do siebie.</li>
+      <li><strong>W turze wykonaj ruch i dołóż kafelek.</strong> Wybierz dowolną kolejność. Jeśli jeszcze nie wykonałeś ruchu, po położeniu kafelka możesz wejść na niego po połączonej ścieżce. Najpierw rozstrzygnij lub pomiń zdolność kafelka. Możesz przejść kilka pól po jednej widocznej prostej ścieżce. Kafelek musi łączyć się przynajmniej jednym bokiem i znajdować się w czyimś polu widzenia. Od razu po jego położeniu dobierz losowy kafelek. Gdy po akcji kafelka i rozstrzygnięciu jego zdolności nie ma legalnej drogi, ruch jest pomijany automatycznie. Gdy droga istnieje, ruch jest obowiązkowy. Po wykonaniu ruchu i akcji kafelka tura kończy się automatycznie, gdy nie pozostała decyzja o zdolności lub odrzuceniu nadmiaru kafelków.</li>
+      <li><strong>Dbaj o widoczność.</strong> Wzrok biegnie ścieżką i zatrzymuje się na żywopłocie, pustym polu, zakręcie lub drzewie. Gdy nikt nie widzi kafelka, znika on z planszy. Jeśli nie możesz nic dołożyć, usuń kafelek zamiast go układać.</li>
+      <li><strong>Wykorzystaj narzędzia.</strong> Łopata pozwala zastąpić inny kafelek. Sekator usuwa inny kafelek. Rotacja obraca inny kafelek, który musi pozostać widoczny. Te zdolności są dobrowolne; nie używaj ich na zajętych polach. Zdolność bez legalnego celu jest pomijana automatycznie. Gdy cele są dostępne, wybierz cel lub pomiń zdolność. Strzałki ograniczają kierunek ruchu i nie mogą prowadzić poza planszę.</li>
+      <li><strong>Zrób miejsce na kwiaty.</strong> Każda z czterech osób zaczyna w swoim ogródku, z czterema kafelkami. Jeden kwiat zostawia miejsce na trzy kafelki, dwa kwiaty — na dwa. Po wyczerpaniu talii przetasuj kafelki odrzucone. Most to dwie odrębne proste ścieżki, także dla wzroku. Twoja ręka pozostaje ukryta przed innymi.</li>
+    </ol>
+    <details class="rules-defaults"><summary>Doprecyzowania i ustalenia gry online</summary><p>Doprecyzowane zasady: start czterech osób w ogródkach, losowe dobieranie od razu po położeniu kafelka, tasowanie odrzuconych po wyczerpaniu talii, osobne proste ścieżki mostu, automatyczne pomijanie ruchu wyłącznie przy braku legalnej drogi oraz automatyczne zakończenie tury po rozstrzygnięciu wszystkich akcji i decyzji.</p><p>Pozostałe przypadki, których oryginalna instrukcja nie opisuje, mają następujące jawne ustalenia:</p><ul><li>Ogródki są stałe: nie usuwa się ich ani nie zastępuje. Pierwsze puste pole na linii wzroku jest miejscem, w którym można budować.</li><li>Wszystkie 60 kafelków bierze udział w grze. Nadmiar kafelków po zdobyciu kwiatu odrzuca właściciel.</li><li>Podwójny zakręt ma osobne ścieżki. Strzałki ograniczają ruch, lecz wzrok działa w obu kierunkach. Na jednym polu może stać więcej niż jedna osoba.</li></ul></details>
+    <a class="source-link" href="rules.pdf" target="_blank" rel="noopener">Otwórz oryginalną instrukcję PDF <span aria-hidden="true">↗</span></a>
+    </div>
+  </dialog>
+  <noscript>Włącz JavaScript, aby uruchomić grę. Możesz też przeczytać <a href="rules.pdf">oryginalną instrukcję</a>.</noscript>
+</body>
+</html>

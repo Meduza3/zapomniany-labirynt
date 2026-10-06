@@ -1,0 +1,16 @@
+node_modules/
+data/*
+!data/.gitkeep
+.env
+.env.*
+!.env.example
+.DS_Store
+coverage/
+dist/
+supabase/.temp/
+supabase/.branches/
+.supabase/
+supabase/functions/_shared/engine.mjs
+supabase/functions/_shared/bot.mjs
+supabase/functions/_shared/cloud-room.mjs
+public/vendor/

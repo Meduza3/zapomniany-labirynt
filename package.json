@@ -1,0 +1,25 @@
+{
+  "name": "zapomniany-labirynt",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Self-hosted four-player browser adaptation of Zapomniany Labirynt",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "start": "node server.mjs",
+    "dev": "node --watch server.mjs",
+    "test": "node --test test/*.test.mjs",
+    "check": "node --check server.mjs && node --check src/engine.mjs && node --check src/bot.mjs && node --check src/cloud-room.mjs && node --check public/app.js && node --check public/cloud-transport.js && node --check scripts/build.mjs && node --check scripts/deploy-backend.mjs",
+    "build": "node scripts/build.mjs",
+    "prepare:edge": "node scripts/prepare-edge.mjs",
+    "test:cloud": "node --test test/cloud.integration.test.mjs",
+    "deploy:backend": "node scripts/deploy-backend.mjs"
+  },
+  "devDependencies": {
+    "@supabase/supabase-js": "2.117.2",
+    "esbuild": "0.28.2",
+    "supabase": "2.119.0"
+  }
+}
