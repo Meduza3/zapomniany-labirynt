@@ -1,7 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createHash, randomUUID } from 'node:crypto';
-import { cloudPlayerViews } from '../src/cloud-room.mjs';
+import { cloudPlayerViews, cloudRoomView } from '../src/cloud-room.mjs';
+import { applyAction } from '../src/engine.mjs';
 
 const endpoint = process.env.LABIRYNT_SUPABASE_URL?.replace(/\/$/, '');
 const publishableKey = process.env.LABIRYNT_SUPABASE_PUBLISHABLE_KEY;
@@ -204,12 +205,19 @@ test('real Supabase authenticates rooms, protects private state, and serializes 
     assert.deepEqual(expectStatus(await api(hostUser, `/api/rooms/${host.code}`), 200, 'Forbidden writes preserve the room'), own[0].view);
   });
 
-  await t.test('same-revision actions and accepted retries cannot duplicate a tile or draw', async () => {
+  await t.test('same-revision actions and accepted retries cannot duplicate a tile or draw', {
+    skip: serviceKey || required ? false : 'Set LABIRYNT_SUPABASE_SERVICE_KEY to compare the committed action with its authoritative before-state.',
+  }, async () => {
+    assert.ok(serviceKey, 'Required concurrency tests need LABIRYNT_SUPABASE_SERVICE_KEY.');
     const view = expectStatus(await api(hostUser, `/api/rooms/${host.code}`), 200, 'Read the current turn');
     assert.equal(view.game.currentPlayerId, host.playerId);
+    const original = expectStatus(await admin('/rest/v1/rpc/load_cloud_room', { method: 'POST', body: { p_code: host.code } }), 200, 'Read only the concurrency fixture before-state');
+    assert.deepEqual(cloudRoomView(original, hostUser.user.id), view);
     const placement = view.game.legal.placements[0];
     assert.ok(placement);
     const body = { action: { type: 'place', ...placement }, revision: view.revision };
+    const expectedGame = applyAction(original.game, host.playerId, body.action);
+    const expected = { ...original, revision: original.revision + 1, status: expectedGame.status, game: expectedGame };
     expectStatus(await api(guestUser, `/api/rooms/${host.code}/actions`, { method: 'POST', body }), 403, 'Reject a forged turn');
     expectStatus(await api(hostUser, `/api/rooms/${host.code}/actions`, {
       method: 'POST', body: { ...body, action: { ...body.action, tileId: 'invented-tile' } },
@@ -222,11 +230,13 @@ test('real Supabase authenticates rooms, protects private state, and serializes 
     const accepted = results[winner].data;
     assert.equal(accepted.revision, view.revision + 1);
     assert.equal(accepted.game.board[placement.index].id, placement.tileId);
-    assert.equal(accepted.game.deckCount, view.game.deckCount);
-    assert.equal(accepted.game.players.find(player => player.id === host.playerId).hand.length, 3);
+    assert.deepEqual(accepted, cloudRoomView(expected, hostUser.user.id), 'Exactly one placement must commit, including a refill only when that action completes the turn.');
     const repeated = expectStatus(await api(hostUser, `/api/rooms/${host.code}/actions`, commands[winner]), 200, 'Replay accepted action');
     assert.deepEqual(repeated, accepted);
     assert.deepEqual(expectStatus(await api(hostUser, `/api/rooms/${host.code}`), 200, 'Reload committed action'), accepted);
+    const saved = expectStatus(await admin('/rest/v1/rpc/load_cloud_room', { method: 'POST', body: { p_code: host.code } }), 200, 'Read the persisted action after its retry');
+    assert.equal(saved.revision, expected.revision);
+    assert.deepEqual(saved.game, expectedGame, 'A replay cannot change hidden hands, deck order, or the completed turn.');
   });
 
   await t.test('persisted bot work continues after the human finishes and the view reconnects', async () => {

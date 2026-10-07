@@ -58,7 +58,7 @@ GitHub Pages serves the built website. Supabase authenticates players, stores ro
 | Variable `SUPABASE_URL` | The project URL, such as `https://your-project.supabase.co` |
 | Variable `SUPABASE_PUBLISHABLE_KEY` | The project's publishable key, or its legacy `anon` key |
 | Secret `SUPABASE_ACCESS_TOKEN` | A Supabase personal access token authorized to deploy this project |
-| Optional secret `SUPABASE_SERVICE_KEY` | A secret API key or legacy `service_role` key for integration-test cleanup and lease recovery checks |
+| Secret `SUPABASE_SERVICE_KEY` | A secret API key or legacy `service_role` key for persisted-state integration checks and fixture cleanup |
 
 Restrict the deployment personal access token to this game project. Initial setup needs read/write access for Project Settings, Database, Migrations, Auth Config, Edge Functions, and Edge Function Secrets. Once anonymous sign-ins and the site URL match the configured values, CI skips Auth mutations and read access to Project Settings suffices for that settings check. Keep write access for database migrations, functions, and function secrets; changing Auth settings later needs the initial write permissions again.
 
@@ -78,7 +78,7 @@ export LABIRYNT_SUPABASE_PUBLISHABLE_KEY="your-local-publishable-key"
 LABIRYNT_REQUIRE_CLOUD_TESTS=true npm run test:cloud
 ```
 
-This separate integration harness uses real Auth, HTTP, Postgres permissions, and persisted room views. It checks private hands, unauthorized access, unused color selection, competing actions, request replay, and bot continuation. It creates five anonymous test accounts and two rooms. Optionally set `LABIRYNT_SUPABASE_SERVICE_KEY` in the test environment to verify lease expiry and stale-worker rejection, then delete only that run's fixtures automatically. Without that key, the test prints fixture IDs for cleanup and skips the lease probe. Never include the service key in the website configuration.
+This separate integration harness uses real Auth, HTTP, Postgres permissions, and persisted room views. It checks private hands, unauthorized access, unused color selection, competing actions, request replay, bot continuation, and completed-game statistics. Set `LABIRYNT_SUPABASE_SERVICE_KEY` for the full suite, including exact persisted-state comparisons, lease expiry, stale-worker rejection, and automatic cleanup of that run's fixtures. Required CI runs fail without this key; optional runs skip checks that need privileged access and print fixture IDs for manual cleanup. Never include the service key in the website configuration.
 
 Supabase's default anonymous signup limit is 30 per hour per IP, so repeated runs may require waiting or adjusting the test project's limit. [Auth rate limits](https://supabase.com/docs/guides/auth/rate-limits)
 
@@ -135,7 +135,7 @@ Verified on Node.js 22.18.0: the automated rule, bot, browser-controller, server
 
 Automatic turn completion is covered for both action orders, blocked movement, optional tools, flower discards, bot turns, persisted state, and private multiplayer updates. A browser check confirms that entering a newly placed tile immediately starts the next player’s turn without an extra button press.
 
-The welcome preview runs a fresh four-bot game using the same rules and bot decisions as multiplayer. A browser worker keeps the simulation separate from the form, and only the miniature board changes between moves. Tiles, pawns, and remaining garden flowers animate as the game advances, and a completed game starts a new one. The pause button stops play; hidden tabs and offscreen previews pause automatically. The demo stays entirely in the browser, without creating a room or saving statistics.
+The welcome preview runs a fresh four-bot game using the same rules and bot decisions as multiplayer. A browser worker keeps the simulation separate from the form, and only the miniature board changes between moves. Tiles and pawns animate as the game advances, remaining garden flowers update after collection, and a completed game starts a new one. The pause button stops play; hidden tabs and offscreen previews pause automatically. The demo stays entirely in the browser, without creating a room or saving statistics.
 
 The waiting room, reduced-motion mode, and browsers without worker support use a static preview selected from 16 layouts reached through legal play. Every path is visible to a pawn, each physical tile appears at most once, and garden flowers reflect the layout. Typing and lobby updates preserve the selected scene. Run `npm run build:preview` after changing the engine or bots to refresh the local worker bundle; the hosted build does this automatically.
 

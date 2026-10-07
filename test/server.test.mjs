@@ -4,6 +4,7 @@ import { mkdtemp, mkdir, readFile, rm, symlink, writeFile } from 'node:fs/promis
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { createServer } from '../server.mjs';
+import { applyAction, viewFor } from '../src/engine.mjs';
 
 async function fixture(t, options = {}) {
   const directory = await mkdtemp(path.join(tmpdir(), 'zapomniany-labirynt-'));
@@ -211,19 +212,22 @@ test('the server rejects forged turns and invalid moves without changing persist
 test('simultaneous actions at the same revision commit exactly one legal change', async t => {
   const app = await fixture(t);
   const { code, current, view } = await activeRoom(app);
+  const original = JSON.parse(await readFile(path.join(app.dataDir, 'rooms.json'), 'utf8')).rooms.find(room => room.code === code);
   const placement = view.game.legal.placements[0];
   assert.ok(placement);
   const request = { method: 'POST', token: current.token, body: { action: { type: 'place', ...placement }, revision: view.revision } };
+  const expectedGame = applyAction(original.game, current.playerId, request.body.action);
+  const expectedView = viewFor(expectedGame, current.playerId);
+  expectedView.players = expectedView.players.map(player => ({ ...player, isBot: false }));
   const results = await Promise.all([app.request(`/api/rooms/${code}/actions`, request), app.request(`/api/rooms/${code}/actions`, request)]);
   assert.deepEqual(results.map(result => result.status).sort(), [200, 409]);
   const accepted = results.find(result => result.status === 200).data;
   assert.equal(accepted.revision, view.revision + 1);
   assert.equal(accepted.game.board[placement.index].id, placement.tileId);
-  assert.equal(accepted.game.deckCount, view.game.deckCount);
-  assert.equal(accepted.game.players.find(player => player.id === current.playerId).hand.length, 3);
+  assert.deepEqual(accepted.game, expectedView, 'One accepted placement includes a refill only when it completes the turn.');
   const saved = JSON.parse(await readFile(path.join(app.dataDir, 'rooms.json'), 'utf8'));
   assert.equal(saved.rooms[0].revision, accepted.revision);
-  assert.equal(saved.rooms[0].game.board[placement.index].id, placement.tileId);
+  assert.deepEqual(saved.rooms[0].game, expectedGame, 'Competing commands cannot change hidden hands or the draw order twice.');
 });
 
 test('SSE delivers player-specific live views, connection presence, and accepted actions', async t => {
