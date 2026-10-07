@@ -229,6 +229,11 @@ function finishExhaustedTurn(game) {
     addLog(game, `${player.name} pomija ruch, ponieważ nie ma legalnej drogi.`);
   }
   if (!game.turn.moved) return;
+  if (player.hand.length > 4 - player.flowers.length) {
+    game.turn.pending = { kind: 'discard', index: player.position };
+    return;
+  }
+  refill(game, player);
   const index = game.players.findIndex(item => item.id === player.id);
   const next = game.players[(index + 1) % game.players.length];
   game.currentPlayerId = next.id;
@@ -295,7 +300,6 @@ export function applyAction(original, playerId, action) {
       }
     }
     forget(game);
-    if (game.status === 'playing' && player.hand.length > 4 - player.flowers.length) game.turn.pending = { kind: 'discard', index: player.position };
   } else if (action.type === 'place') {
     if (!legal.placements.some(item => item.tileId === action.tileId && item.index === action.index && item.rotation === action.rotation)) fail('Tego kafelka nie można tutaj położyć w tym obrocie.');
     const handIndex = player.hand.findIndex(tile => tile.id === action.tileId), tile = player.hand.splice(handIndex, 1)[0];
@@ -305,7 +309,6 @@ export function applyAction(original, playerId, action) {
     addLog(game, `${player.name} kładzie kafelek na polu ${action.index + 1}.`);
     if (tile.ability === 'prune' || tile.ability === 'rotate') game.turn.pending = { kind: tile.ability, index: action.index };
     forget(game);
-    refill(game, player);
   } else if (action.type === 'remove') {
     if (pending || !Number.isInteger(action.index) || !legal.removals.includes(action.index)) fail('Usunięcie zastępuje położenie tylko wtedy, gdy żaden kafelek z ręki nie pasuje.');
     game.discard.push(game.board[action.index]);

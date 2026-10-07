@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
+import { cloudPlayerViews } from '../src/cloud-room.mjs';
 
 const endpoint = process.env.LABIRYNT_SUPABASE_URL?.replace(/\/$/, '');
 const publishableKey = process.env.LABIRYNT_SUPABASE_PUBLISHABLE_KEY;
@@ -221,7 +222,8 @@ test('real Supabase authenticates rooms, protects private state, and serializes 
     const accepted = results[winner].data;
     assert.equal(accepted.revision, view.revision + 1);
     assert.equal(accepted.game.board[placement.index].id, placement.tileId);
-    assert.equal(accepted.game.deckCount, view.game.deckCount - 1);
+    assert.equal(accepted.game.deckCount, view.game.deckCount);
+    assert.equal(accepted.game.players.find(player => player.id === host.playerId).hand.length, 3);
     const repeated = expectStatus(await api(hostUser, `/api/rooms/${host.code}/actions`, commands[winner]), 200, 'Replay accepted action');
     assert.deepEqual(repeated, accepted);
     assert.deepEqual(expectStatus(await api(hostUser, `/api/rooms/${host.code}`), 200, 'Reload committed action'), accepted);
@@ -299,4 +301,143 @@ test('real Supabase authenticates rooms, protects private state, and serializes 
     assert.deepEqual(finished, [{ status: 'done', lease_token: null }]);
     assert.deepEqual(expectStatus(await api(hostUser, `/api/rooms/${host.code}`), 200, 'Lease probes preserve game state'), before);
   });
+});
+
+function prepareFinalTurn(room, winnerSeat, turnCount) {
+  const next = structuredClone(room);
+  const colors = ['green', 'yellow', 'blue', 'red'];
+  next.game.players.forEach((player, index) => {
+    player.flowers = colors.filter(color => color !== player.color).slice(0, index % 3);
+  });
+  const winner = next.game.players[winnerSeat];
+  const targets = colors.filter(color => color !== winner.color);
+  winner.flowers = targets.slice(0, 2);
+  const destination = next.game.board.findIndex(tile => tile?.kind === 'garden' && tile.color === targets[2]);
+  const origin = { 2: 7, 14: 13, 22: 17, 10: 11 }[destination];
+  const tileIndex = next.game.deck.findIndex(tile => tile.kind === 'straight' && !tile.ability);
+  assert.ok(tileIndex >= 0, 'The final-turn fixture needs one real straight tile from its deck.');
+  const [tile] = next.game.deck.splice(tileIndex, 1);
+  next.game.board[origin] = { ...tile, rotation: origin === 7 || origin === 17 ? 1 : 0 };
+  winner.position = origin;
+  winner.entry = null;
+  next.game.currentPlayerId = winner.id;
+  next.game.turnNumber = turnCount;
+  next.game.turn = { moved: false, placed: false, pending: null };
+  next.revision += 1;
+  next.lastActivity = Date.now();
+  return { room: next, destination };
+}
+
+async function seedFinalTurn(original, user, winnerSeat, turnCount) {
+  const prepared = prepareFinalTurn(original, winnerSeat, turnCount);
+  const requestId = randomUUID();
+  expectStatus(await admin('/rest/v1/rpc/commit_cloud_room', {
+    method: 'POST', body: {
+      p_room: prepared.room, p_expected_revision: original.revision,
+      p_actor_id: user.user.id, p_request_id: requestId,
+      p_request_hash: createHash('sha256').update(requestId).digest('hex'),
+      p_response: { status: 200, body: {} }, p_views: cloudPlayerViews(prepared.room),
+    },
+  }), 200, 'Prepare only the isolated statistics fixture through the real commit transaction');
+  return prepared;
+}
+
+function resultRoute(code, createdAt) {
+  return `/rest/v1/game_results?room_code=eq.${encodeURIComponent(code)}${createdAt === undefined ? '' : `&room_created_at=eq.${encodeURIComponent(new Date(createdAt).toISOString())}`}`;
+}
+
+function assertCompletedResult(result, room) {
+  assert.deepEqual(Object.keys(result).sort(), ['room_code', 'room_created_at', 'finished_at', 'turn_count', 'players', 'starter_id', 'winner_id', 'first_player_won'].sort());
+  assert.equal(result.room_code, room.code);
+  assert.equal(Date.parse(result.room_created_at), room.createdAt);
+  assert.equal(Date.parse(result.finished_at), room.lastActivity);
+  assert.equal(result.turn_count, room.game.turnNumber);
+  assert.equal(result.starter_id, room.game.players[0].id);
+  assert.equal(result.winner_id, room.game.winnerId);
+  assert.equal(result.first_player_won, room.game.winnerId === room.game.players[0].id);
+  assert.deepEqual(result.players, room.game.players.map(({ id, name, color, flowers }) => ({ id, name, color, isBot: room.players.find(player => player.id === id).isBot, flowers })));
+  for (const player of result.players) assert.deepEqual(Object.keys(player).sort(), ['id', 'name', 'color', 'isBot', 'flowers'].sort());
+}
+
+test('completed game statistics stay private, survive room cleanup, and record human and bot wins once', {
+  skip: configured && serviceKey ? false : 'Set the real Supabase endpoint, publishable key, and service key to verify private statistics.',
+  timeout: 180_000,
+}, async t => {
+  expectStatus(await admin('/rest/v1/game_results?select=*&limit=0'), 200, 'Statistics table must exist before creating fixtures');
+  const users = [], roomCodes = new Set(), resultFixtures = [];
+  t.after(async () => {
+    for (const code of roomCodes) expectStatus(await admin(`/rest/v1/rooms?code=eq.${encodeURIComponent(code)}`, { method: 'DELETE' }), 204, 'Delete only the statistics test room');
+    for (const { code, createdAt } of resultFixtures) expectStatus(await admin(resultRoute(code, createdAt), { method: 'DELETE' }), 204, 'Delete only the statistics fixture result');
+    for (const user of users) expectStatus(await admin(`/auth/v1/admin/users/${user.user.id}`, { method: 'DELETE' }), 200, 'Delete only the statistics test account');
+    t.diagnostic(`Removed ${roomCodes.size} statistics test rooms, ${resultFixtures.length} result fixtures, and ${users.length} anonymous test account.`);
+  });
+  const user = expectStatus(await request('/auth/v1/signup', { method: 'POST', body: { data: { labirynt_statistics_test: true } } }), 200, 'Create statistics test identity');
+  users.push(user);
+  const session = expectStatus(await api(user, '/api/rooms', { method: 'POST', body: { name: 'Statistics test host' } }), 201, 'Create statistics test room');
+  roomCodes.add(session.code);
+  expectStatus(await api(user, `/api/rooms/${session.code}/color`, { method: 'POST', body: { color: 'red' } }), 200, 'Use a non-green starting player');
+  expectStatus(await api(user, `/api/rooms/${session.code}/bots`, { method: 'POST', body: { count: 3 } }), 200, 'Add isolated statistics bots');
+  expectStatus(await api(user, `/api/rooms/${session.code}/start`, { method: 'POST', body: {} }), 200, 'Start statistics fixture');
+  const original = expectStatus(await admin('/rest/v1/rpc/load_cloud_room', { method: 'POST', body: { p_code: session.code } }), 200, 'Load only the statistics fixture');
+  resultFixtures.push({ code: session.code, createdAt: original.createdAt });
+  assert.deepEqual(expectStatus(await admin(resultRoute(session.code)), 200, 'Unfinished games have no statistics'), []);
+  const prepared = await seedFinalTurn(original, user, 0, 17);
+  assert.deepEqual(expectStatus(await admin(resultRoute(session.code)), 200, 'A prepared winning opportunity is not a completed game'), []);
+  const winningCommand = { method: 'POST', requestId: randomUUID(), body: { action: { type: 'move', index: prepared.destination }, revision: prepared.room.revision } };
+  const won = expectStatus(await api(user, `/api/rooms/${session.code}/actions`, winningCommand), 200, 'Complete the human winning move');
+  assert.equal(won.status, 'finished');
+  const saved = expectStatus(await admin('/rest/v1/rpc/load_cloud_room', { method: 'POST', body: { p_code: session.code } }), 200, 'Read the persisted winning snapshot');
+  const rows = expectStatus(await admin(resultRoute(session.code)), 200, 'Read the private completed result');
+  assert.equal(rows.length, 1);
+  assertCompletedResult(rows[0], saved);
+  assert.equal(rows[0].players[0].color, 'red');
+  assert.equal(rows[0].first_player_won, true);
+  assert.equal(JSON.stringify(rows).includes(user.user.id), false, 'Result records must not retain authentication identities.');
+  for (const identity of [undefined, user]) {
+    for (const method of ['GET', 'PATCH', 'DELETE']) {
+      const denied = await request(resultRoute(session.code), { method, user: identity, ...(method === 'PATCH' ? { body: { turn_count: 1 } } : {}) });
+      assert.ok([401, 403].includes(denied.status), `Statistics ${method} must reject ${identity ? 'authenticated guests' : 'API-key-only callers'}: HTTP ${denied.status}`);
+    }
+  }
+  const deniedRpc = await request('/rest/v1/rpc/record_game_result', { method: 'POST', user, body: { p_room: {} } });
+  assert.ok([401, 403].includes(deniedRpc.status), 'Players cannot invoke the statistics recorder.');
+  assert.deepEqual(expectStatus(await api(user, `/api/rooms/${session.code}/actions`, winningCommand), 200, 'Retry the accepted winning action'), won);
+  expectStatus(await api(user, `/api/rooms/${session.code}/actions`, { ...winningCommand, requestId: randomUUID() }), 409, 'A new command cannot win an already finished game again');
+  expectStatus(await admin(`/rest/v1/rooms?code=eq.${session.code}`, { method: 'PATCH', body: { revision: saved.revision + 1 } }), 204, 'Repeat a finished-room persistence trigger');
+  assert.deepEqual(expectStatus(await admin(resultRoute(session.code)), 200, 'Retries and finished-state persistence keep one original result'), rows);
+  expectStatus(await admin(`/rest/v1/rooms?code=eq.${session.code}`, { method: 'DELETE' }), 204, 'Prune only the completed statistics fixture room');
+  assert.deepEqual(expectStatus(await admin(resultRoute(session.code)), 200, 'Room cleanup retains the completed result'), rows);
+
+  const reused = structuredClone(original);
+  reused.createdAt += 1;
+  reused.lastActivity = Date.now();
+  reused.revision = 1;
+  const requestId = randomUUID();
+  resultFixtures.push({ code: reused.code, createdAt: reused.createdAt });
+  expectStatus(await admin('/rest/v1/rpc/commit_cloud_room', {
+    method: 'POST', body: {
+      p_room: reused, p_expected_revision: 0, p_actor_id: user.user.id, p_request_id: requestId,
+      p_request_hash: createHash('sha256').update(requestId).digest('hex'), p_response: { status: 200, body: {} }, p_views: cloudPlayerViews(reused),
+    },
+  }), 200, 'Create a later fixture match with the same room code');
+  await seedFinalTurn(reused, user, 1, 26);
+  const deadline = Date.now() + 60_000;
+  let botFinished;
+  while (Date.now() < deadline) {
+    const view = expectStatus(await api(user, `/api/rooms/${session.code}`), 200, 'Wait for the persisted bot winning action');
+    if (view.status === 'finished') { botFinished = view; break; }
+    await new Promise(resolve => setTimeout(resolve, 350));
+  }
+  assert.ok(botFinished, 'The real bot worker must finish the isolated winning turn.');
+  const botSaved = expectStatus(await admin('/rest/v1/rpc/load_cloud_room', { method: 'POST', body: { p_code: session.code } }), 200, 'Load the persisted bot win');
+  const allResults = expectStatus(await admin(`${resultRoute(session.code)}&order=room_created_at.asc`), 200, 'Read two distinct matches with the reused code');
+  assert.equal(allResults.length, 2);
+  assert.deepEqual(allResults[0], rows[0]);
+  assertCompletedResult(allResults[1], botSaved);
+  assert.equal(allResults[1].first_player_won, false);
+  assert.equal(allResults[1].players[1].isBot, true);
+  assert.equal(allResults[1].winner_id, allResults[1].players[1].id);
+  assert.equal(allResults[1].turn_count, 26);
+  expectStatus(await admin(`/rest/v1/rooms?code=eq.${session.code}`, { method: 'DELETE' }), 204, 'Prune the bot fixture room');
+  assert.deepEqual(expectStatus(await admin(`${resultRoute(session.code)}&order=room_created_at.asc`), 200, 'Both match results outlive room cleanup'), allResults);
 });

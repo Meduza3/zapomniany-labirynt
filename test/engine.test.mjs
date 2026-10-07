@@ -114,16 +114,17 @@ test('views reveal only the requesting player hand and cannot mutate the game', 
   assert.equal(game.board[2].rotation, 0);
 });
 
-test('placement and one straight movement can happen in either order, with immediate redraw', () => {
+test('replacement tiles arrive only when movement and placement finish in either order', () => {
   for (const moveFirst of [false, true]) {
     let game = scene();
     put(game, 13);
+    actor(game).hand = [tile(), tile(), tile(), tile()];
     const original = structuredClone(game);
     if (moveFirst) game = act(game, { type: 'move', index: 13 });
     const beforeDeck = game.deck.length;
     game = place(game, 14);
-    assert.equal(actor(game).hand.length, 4);
-    assert.equal(game.deck.length, beforeDeck - 4);
+    assert.equal(actor(game).hand.length, moveFirst ? 4 : 3);
+    assert.equal(game.deck.length, beforeDeck - (moveFirst ? 1 : 0));
     assert.equal(original.board[14], null);
     if (!moveFirst) {
       assert.equal(game.currentPlayerId, 'p0');
@@ -133,7 +134,8 @@ test('placement and one straight movement can happen in either order, with immed
     assert.equal(game.currentPlayerId, 'p1');
     assert.equal(game.turnNumber, 2);
     assert.deepEqual(game.turn, { moved: false, placed: false, pending: null });
-    assert.equal(game.deck.length, beforeDeck - 4);
+    assert.equal(actor(game).hand.length, 4);
+    assert.equal(game.deck.length, beforeDeck - 1);
     assert.throws(() => act(game, { type: 'endTurn' }), /swoją turę/);
   }
 });
@@ -144,18 +146,24 @@ test('a connected tile just placed remains a movement destination after resolvin
       let game = scene();
       put(game, 11, 'tee');
       actor(game).hand = [tile('straight', 0, ability)];
+      const beforeDeck = game.deck.length;
       assert.equal(legal(game).moves.includes(13), false);
       game = place(game, 13);
+      assert.equal(actor(game).hand.length, 0);
+      assert.equal(game.deck.length, beforeDeck);
       assert.equal(game.turn.moved, false);
       assert.deepEqual(legal(game).moves, []);
       game = act(game, useTool
         ? { type: 'ability', index: 11, ...(ability === 'rotate' ? { rotation: 3 } : {}) }
         : { type: 'skipAbility' });
       assert.ok(legal(game).moves.includes(13));
+      assert.equal(actor(game).hand.length, 0);
+      assert.equal(game.deck.length, beforeDeck);
       game = act(game, { type: 'move', index: 13 });
       assert.equal(actor(game).position, 13);
       assert.equal(game.currentPlayerId, 'p1');
       assert.equal(game.turnNumber, 2);
+      assert.equal(actor(game).hand.length, 4);
       assert.throws(() => act(game, { type: 'move', index: 12 }), /swoją turę/);
     }
   }
@@ -181,11 +189,14 @@ test('a completed turn waits for an available optional tool to be used or skippe
       put(game, 11, 'tee');
       put(game, 13);
       actor(game).hand = [tile('straight', 0, ability)];
+      const beforeDeck = game.deck.length;
       game = act(game, { type: 'move', index: 13 });
       game = place(game, 14);
       assert.equal(game.currentPlayerId, 'p0');
       assert.equal(game.turnNumber, 1);
       assert.equal(game.turn.pending.kind, ability);
+      assert.equal(actor(game).hand.length, 0);
+      assert.equal(game.deck.length, beforeDeck);
       assert.equal(legal(game).canEnd, false);
       assert.throws(() => act(game, { type: 'endTurn' }), /Najpierw/);
       game = act(game, useTool
@@ -195,6 +206,8 @@ test('a completed turn waits for an available optional tool to be used or skippe
       assert.equal(game.turnNumber, 2);
       assert.equal(game.turn.pending, null);
       assert.equal(game.board[11] === null, useTool && ability === 'prune');
+      assert.equal(actor(game).hand.length, 4);
+      assert.equal(game.deck.length, beforeDeck - 4);
     }
   }
 });
@@ -225,10 +238,13 @@ test('a blocked move ends the turn after placing only when skipping is enabled',
     game.players[3].position = 0;
     assert.equal(legal(game).moves.length, 0);
     assert.equal(game.currentPlayerId, 'p0');
+    const beforeDeck = game.deck.length;
     game = place(game, 1);
     assert.equal(game.currentPlayerId, allowed ? 'p1' : 'p0');
     assert.equal(game.turnNumber, allowed ? 2 : 1);
     assert.equal(game.log.some(item => /pomija ruch/.test(item.text)), allowed);
+    assert.equal(actor(game).hand.length, allowed ? 4 : 0);
+    assert.equal(game.deck.length, beforeDeck - (allowed ? 4 : 0));
     if (!allowed) assert.equal(game.turn.placed, true);
   }
 });
@@ -271,6 +287,71 @@ test('the last flower discard ends a completed turn only after all excess tiles 
   assert.equal(game.turn.pending, null);
   assert.equal(actor(game).hand.length, 2);
   assert.ok(chosen.every(id => game.discard.some(item => item.id === id)));
+});
+
+test('multiple flowers can leave a discard choice only after the placement and its power', () => {
+  let game = scene();
+  game.board[13] = { ...tile('garden'), color: 'yellow' };
+  game.board[14] = { ...tile('garden'), color: 'blue' };
+  const tool = tile('straight', 0, 'prune');
+  actor(game).hand = [tool, tile(), tile(), tile()];
+  put(game, 11);
+  const beforeDeck = game.deck.length;
+  game = act(game, { type: 'move', index: 14 });
+  assert.equal(game.turn.pending, null);
+  assert.equal(actor(game).hand.length, 4);
+  game = act(game, { type: 'place', tileId: tool.id, index: 10, rotation: 0 });
+  assert.equal(game.turn.pending.kind, 'prune');
+  assert.equal(actor(game).hand.length, 3);
+  game = act(game, { type: 'skipAbility' });
+  assert.equal(game.currentPlayerId, 'p0');
+  assert.equal(game.turn.pending.kind, 'discard');
+  assert.equal(game.deck.length, beforeDeck);
+  const chosen = actor(game).hand[0].id;
+  game = act(game, { type: 'discard', tileId: chosen });
+  assert.equal(game.currentPlayerId, 'p1');
+  assert.equal(actor(game).hand.length, 2);
+  assert.ok(game.discard.some(item => item.id === chosen));
+  assert.equal(game.deck.length, beforeDeck);
+});
+
+test('legacy discard choices remain playable before an unfinished tile action', () => {
+  let game = scene();
+  actor(game).flowers = ['yellow'];
+  actor(game).hand = [tile(), tile(), tile(), tile()];
+  game.turn = { moved: true, placed: false, pending: { kind: 'discard', index: 12 } };
+  const beforeDeck = game.deck.length;
+  const chosen = actor(game).hand[0].id;
+  game = act(game, { type: 'discard', tileId: chosen });
+  assert.equal(game.turn.pending, null);
+  assert.equal(game.currentPlayerId, 'p0');
+  assert.equal(actor(game).hand.length, 3);
+  assert.equal(game.deck.length, beforeDeck);
+  game = place(game, 13);
+  assert.equal(game.currentPlayerId, 'p1');
+  assert.equal(actor(game).hand.length, 3);
+  assert.equal(game.deck.length, beforeDeck - 1);
+});
+
+test('forced removal keeps a genuine hand overflow for an explicit final discard', () => {
+  let game = scene();
+  game.board[12] = tile('corner');
+  game.board[13] = tile('tree');
+  game.board[17] = tile('tree');
+  actor(game).flowers = ['yellow'];
+  actor(game).hand = [tile(), tile(), tile(), tile()];
+  game.turn.moved = true;
+  const beforeDeck = game.deck.length;
+  assert.deepEqual(legal(game).placements, []);
+  game = act(game, { type: 'remove', index: 13 });
+  assert.equal(game.currentPlayerId, 'p0');
+  assert.equal(game.turn.pending.kind, 'discard');
+  assert.equal(actor(game).hand.length, 4);
+  const chosen = actor(game).hand[0].id;
+  game = act(game, { type: 'discard', tileId: chosen });
+  assert.equal(game.currentPlayerId, 'p1');
+  assert.equal(actor(game).hand.length, 3);
+  assert.equal(game.deck.length, beforeDeck);
 });
 
 test('visibility includes a bend or tree and ends there; movement cannot turn in one action', () => {
@@ -463,20 +544,27 @@ test('forced removal is unavailable while any tile can be placed and never remov
   assert.equal(legal(game).removals.includes(13), false);
 });
 
-test('flower collection is distinct, immediate, and gives the player an excess-tile choice', () => {
+test('flower collection stays distinct and placing a tile makes room without discarding', () => {
   let game = scene();
   game.board[13] = { ...tile('garden'), color: 'yellow' };
   actor(game).hand = [tile(), tile(), tile(), tile()];
   game = act(game, { type: 'move', index: 13 });
   assert.deepEqual(actor(game).flowers, ['yellow']);
-  assert.equal(game.turn.pending.kind, 'discard');
-  assert.equal(legal(game).discardTileIds.length, 4);
-  assert.throws(() => act(game, { type: 'skipAbility' }), /opcjonalnej/);
-  const chosen = actor(game).hand[2].id;
-  game = act(game, { type: 'discard', tileId: chosen });
-  assert.equal(actor(game).hand.length, 3);
-  assert.ok(game.discard.some(item => item.id === chosen));
   assert.equal(game.turn.pending, null);
+  assert.equal(actor(game).hand.length, 4);
+  assert.deepEqual(legal(game).discardTileIds, []);
+  const collected = structuredClone(game);
+  const beforeDeck = game.deck.length;
+  const chosen = actor(game).hand[2].id;
+  assert.throws(() => act(game, { type: 'discard', tileId: chosen }), /Wybierz swój kafelek/);
+  game = act(game, { type: 'place', tileId: chosen, index: 14, rotation: 0 });
+  assert.equal(actor(game).hand.length, 3);
+  assert.equal(game.board[14].id, chosen);
+  assert.equal(game.discard.some(item => item.id === chosen), false);
+  assert.equal(game.deck.length, beforeDeck);
+  assert.equal(game.currentPlayerId, 'p1');
+  assert.equal(game.turn.pending, null);
+  game = collected;
   nextMove(game);
   game = act(game, { type: 'move', index: 12 });
   nextMove(game);
@@ -485,30 +573,69 @@ test('flower collection is distinct, immediate, and gives the player an excess-t
   assert.equal(game.turn.pending, null);
 });
 
-test('flowers reduce immediate replacement draws and the third distinct flower wins immediately', () => {
+test('flower capacity is applied when a placement-first turn finishes', () => {
+  let game = scene();
+  actor(game).hand = [tile(), tile(), tile(), tile()];
+  game.board[13] = { ...tile('garden'), color: 'yellow' };
+  const beforeDeck = game.deck.length;
+  game = place(game, 11);
+  assert.equal(actor(game).hand.length, 3);
+  assert.equal(game.deck.length, beforeDeck);
+  game = act(game, { type: 'move', index: 13 });
+  assert.equal(game.currentPlayerId, 'p1');
+  assert.equal(game.turn.pending, null);
+  assert.deepEqual(actor(game).flowers, ['yellow']);
+  assert.equal(actor(game).hand.length, 3);
+  assert.equal(game.deck.length, beforeDeck);
+});
+
+test('end-of-turn draws fill only the slots not occupied by existing flowers', () => {
   let game = scene();
   actor(game).flowers = ['yellow', 'blue'];
   actor(game).hand = [tile(), tile()];
+  put(game, 13);
+  const beforeDeck = game.deck.length;
   game = place(game, 11);
-  assert.equal(actor(game).hand.length, 2);
-  game.board[13] = { ...tile('garden'), color: 'red' };
+  assert.equal(actor(game).hand.length, 1);
+  assert.equal(game.deck.length, beforeDeck);
   game = act(game, { type: 'move', index: 13 });
-  assert.equal(game.status, 'finished');
-  assert.equal(game.winnerId, 'p0');
-  assert.equal(game.currentPlayerId, 'p0');
-  assert.equal(game.turnNumber, 1);
-  assert.deepEqual(actor(game).flowers, ['yellow', 'blue', 'red']);
-  assert.equal(game.turn.pending, null);
-  assert.equal(legal(game).canEnd, false);
-  assert.throws(() => act(game, { type: 'endTurn' }), /zakończona/);
+  assert.equal(game.currentPlayerId, 'p1');
+  assert.equal(actor(game).hand.length, 2);
+  assert.equal(game.deck.length, beforeDeck - 1);
 });
 
-test('empty draw stock reshuffles spent tiles immediately after a placement', () => {
-  const game = scene();
+test('a third flower wins immediately without drawing or forcing a final discard', () => {
+  for (const placeFirst of [false, true]) {
+    let game = scene();
+    actor(game).flowers = ['yellow', 'blue'];
+    actor(game).hand = [tile(), tile()];
+    game.board[13] = { ...tile('garden'), color: 'red' };
+    const beforeDeck = game.deck.length;
+    if (placeFirst) game = place(game, 11);
+    game = act(game, { type: 'move', index: 13 });
+    assert.equal(game.status, 'finished');
+    assert.equal(game.winnerId, 'p0');
+    assert.equal(game.currentPlayerId, 'p0');
+    assert.equal(game.turnNumber, 1);
+    assert.deepEqual(actor(game).flowers, ['yellow', 'blue', 'red']);
+    assert.equal(actor(game).hand.length, placeFirst ? 1 : 2);
+    assert.equal(game.deck.length, beforeDeck);
+    assert.equal(game.turn.pending, null);
+    assert.equal(legal(game).canEnd, false);
+    assert.throws(() => act(game, { type: 'endTurn' }), /zakończona/);
+  }
+});
+
+test('empty draw stock reshuffles spent tiles only when the turn ends', () => {
+  let game = scene();
   game.deck = [];
   const spent = [tile('corner'), tile('tee'), tile('bridge'), tile('tree')];
   game.discard = structuredClone(spent);
-  const changed = place(game, 13);
+  game = place(game, 13);
+  assert.equal(actor(game).hand.length, 0);
+  assert.equal(game.discard.length, 4);
+  assert.equal(game.log.some(item => /Przetasowano/.test(item.text)), false);
+  const changed = act(game, { type: 'move', index: 13 });
   assert.equal(actor(changed).hand.length, 4);
   assert.deepEqual(new Set(actor(changed).hand.map(item => item.id)), new Set(spent.map(item => item.id)));
   assert.equal(changed.discard.length, 0);
@@ -523,6 +650,9 @@ test('an exhausted draw and discard stock does not invent replacement tiles', ()
   const changed = place(game, 13);
   assert.equal(actor(changed).hand.length, 0);
   assert.equal(changed.board[13].kind, 'straight');
+  const finished = act(changed, { type: 'move', index: 13 });
+  assert.equal(finished.currentPlayerId, 'p1');
+  assert.equal(actor(finished).hand.length, 0);
 });
 
 test('blocked movement can be skipped only after placing and only when no move exists', () => {

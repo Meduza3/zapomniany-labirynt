@@ -28,15 +28,15 @@ Bots choose their actions on the server with a short delay, so everyone can foll
 
 ## Your turn
 
-Move along one visible straight path and place one tile, in either order. Select a tile in your hand to see full-size previews on every eligible board space. Each preview uses a legal orientation. Hover or focus a space and press R, or use the mouse wheel over it, to cycle only through its legal rotations. The rotate button remains available for touch controls. Click or tap a preview once to place exactly that orientation, without a confirmation step. A shovel can also replace an unoccupied path tile. Draw a replacement immediately after placement, up to four total hand slots including flowers.
+Move along one visible straight path and place one tile, in either order. Select a tile in your hand to see full-size previews on every eligible board space. Each preview uses a legal orientation. Hover or focus a space and press R, or use the mouse wheel over it, to cycle only through its legal rotations. The rotate button remains available for touch controls. Click or tap a preview once to place exactly that orientation, without a confirmation step. A shovel can also replace an unoccupied path tile. Draw only at the end of your turn, after both actions and any tool or discard decision, until tiles and collected flowers fill four total hand slots.
 
 Newly placed tiles settle onto the board over 320 milliseconds. Tile rotations, including hand and board previews, take 220 milliseconds. Pawns travel along their road in 220–460 milliseconds, collected flowers fly from their garden to the player in 420 milliseconds, and newly drawn tiles slide into the hand in 320 milliseconds. The winner’s three flowers bloom once over 900 milliseconds. These animations do not delay the accepted move; reduced-motion preferences show the final state immediately.
 
 If your normal movement is still unused, you can enter a newly placed tile connected to your visible straight path. Click the highlighted square or **Wejdź na nowy kafelek**.
 
-Pruning and rotation powers are optional and appear as an extra prompt after placement. Resolve the power or choose **Pomiń zdolność**. Any unused legal movement remains available afterward. If no tile in your hand can be placed in any rotation, remove an eligible tile instead. Tiles unseen by every player disappear automatically. Their paths overgrow with vines and leaves over 1.4 seconds, blending into the board’s foliage without blocking play. Reduced-motion preferences show the final foliage immediately. Visit each opponent's garden to collect one flower of each color; the third flower wins immediately. If a flower makes your hand too large, choose a path tile to discard.
+Pruning and rotation powers are optional and appear as an extra prompt after placement. Resolve the power or choose **Pomiń zdolność**. Any unused legal movement remains available afterward. If no tile in your hand can be placed in any rotation, remove an eligible tile instead. Tiles unseen by every player disappear automatically. Their paths overgrow with vines and leaves over 1.4 seconds, blending into the board’s foliage without blocking play. Reduced-motion preferences show the final foliage immediately. Visit each opponent's garden to collect one flower of each color; the third flower wins immediately. When you collect a flower before building, keep your tiles until you finish the tile action. The placed tile normally makes room for the flower. Only excess tiles still remaining at the end of the turn require a discard choice.
 
-Turns end automatically once movement and the tile action are complete and no tool or discard decision remains. When no legal movement remains after the tile action and its optional power, the server skips the blocked movement and advances to the next player automatically. An optional power with legal targets and any required discard still wait for your choice. A power without legal targets is skipped automatically. Manual finish/skip controls appear only when an older saved turn still needs them.
+Turns end automatically once movement and the tile action are complete and no tool or discard decision remains. The outgoing player’s hand refills to its flower-adjusted capacity immediately before the next player’s turn. When no legal movement remains after the tile action and its optional power, the server skips the blocked movement and advances to the next player automatically. An optional power with legal targets and any required discard still wait for your choice. A power without legal targets is skipped automatically. Manual finish/skip controls appear only when an older saved turn still needs them.
 
 Each garden displays its remaining flower tokens along the outside edge of the board. Gardens begin with three flowers; a token disappears when an opponent collects that color, and every player's screen updates automatically.
 
@@ -84,7 +84,15 @@ Supabase's default anonymous signup limit is 30 per hour per IP, so repeated run
 
 Without connection settings, the cloud suite skips during ordinary `npm test`. Setting `LABIRYNT_REQUIRE_CLOUD_TESTS=true` makes missing settings fail immediately; the deployment workflow enables this guard. Local unit and Node-server tests do not prove a hosted Supabase deployment is healthy.
 
-All seven integration scenarios passed against real local Supabase in 10 seconds and the hosted project in 33 seconds, including three automatic bot turns, lease recovery, and fixture cleanup. The hosted run verified both the new publishable and secret API keys. The deployment workflow repeats the hosted checks before publishing Pages.
+The integration harness covers automatic bot turns, lease recovery, private completed-game statistics, and fixture cleanup against real Supabase. The deployment workflow repeats the hosted checks before publishing Pages.
+
+## Completed-game statistics
+
+Every finished game records one private result automatically on the backend, including wins by bots. On Supabase, open **Table Editor → game_results** in the project dashboard. Local Node hosting stores the same records in the top-level `results` array in `DATA_DIR/rooms.json`.
+
+Each result contains the room code and creation time, finish time, `turn_count`, ordered player results with names, colors, bot status and final flower colors, `starter_id`, `winner_id`, and `first_player_won`. Turn count means individual player turns, including the winning turn, not complete four-player rounds. The starter is the first player in turn order, regardless of garden color.
+
+Results are saved with the finished room state. Repeated requests and restarts do not create duplicates, and room cleanup retains the result. The Supabase migration also records already-finished rooms. Results contain no hands, deck order, authentication IDs, or session credentials. Browser accounts cannot read or change this table; only project administrators and the backend can access it.
 
 ## Host with Docker
 
@@ -123,7 +131,7 @@ npm test
 npm run check
 ```
 
-Verified on Node.js 22.18.0: the automated rule, bot, browser-controller, server, build, and cloud-command suites pass. The separate hosted integration suite also passed all seven scenarios described above. A four-browser Chrome session completed eight turns, restored the correct seat after reload, and displayed the board at a 390-pixel mobile width without overflow. Additional browser scenarios exercised pruning, rotation, flower discarding, forced removal, shovel replacement, and victory. A separate simulation preserved all 60 tiles and valid player positions through more than 10,000 actions. Bot browser checks verify adding/removing bot seats, three automatic bot turns, movement onto a newly placed tile, reload recovery, and returning to an existing room after opening a new one.
+Verified on Node.js 22.18.0: the automated rule, bot, browser-controller, server, build, and cloud-command suites pass. The separate hosted integration suite validates the scenarios described above. A four-browser Chrome session completed eight turns, restored the correct seat after reload, and displayed the board at a 390-pixel mobile width without overflow. Additional browser scenarios exercised pruning, rotation, flower discarding, forced removal, shovel replacement, and victory. A separate simulation preserved all 60 tiles and valid player positions through more than 10,000 actions. Bot browser checks verify adding/removing bot seats, three automatic bot turns, movement onto a newly placed tile, reload recovery, and returning to an existing room after opening a new one.
 
 Automatic turn completion is covered for both action orders, blocked movement, optional tools, flower discards, bot turns, persisted state, and private multiplayer updates. A browser check confirms that entering a newly placed tile immediately starts the next player’s turn without an extra button press.
 
@@ -139,7 +147,7 @@ Browser-controller tests validate all 16 layouts on both screens and preview sta
 
 Engine and bot tests use Node's built-in runner for fast feedback. Bot decision tests have a separate file because choosing a move is distinct from validating the game rules. Server tests use real local HTTP connections and temporary persistent storage to verify room privacy, multiplayer updates, action validation, and recovery without faking the behavior under test.
 
-Collected flowers occupy the hand slots they replace, using the same colored tokens as the gardens. During a pending discard or victory, all actual tiles and flowers remain visible even when they temporarily exceed four items. Client tests cover these cases, empty slots when the deck is depleted, and restoration after reload.
+Collected flowers occupy the hand slots they replace, using the same colored tokens as the gardens. After collecting a flower before building, during a required end-of-turn discard, or at victory, all actual tiles and flowers remain visible even when they temporarily exceed four items. Client tests cover these cases, empty slots when the deck is depleted, and restoration after reload.
 
 Flower display checks cover all counts from zero to three, collection updates across two browsers, reload recovery, repeated garden visits, and mobile layout at 390 pixels wide. The fantasy theme was checked in the welcome screen, lobby, active game, and rules window; desktop and 390-pixel layouts, tile placement, movement onto a new tile, bot turns, and reload recovery passed browser checks. The focused static-serving test and JavaScript syntax checks also pass.
 

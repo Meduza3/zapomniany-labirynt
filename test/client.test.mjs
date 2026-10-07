@@ -348,6 +348,8 @@ test('landing shows the shared rules after the preview and the header keeps room
   assert.equal(client.html.split(rulesContent).length, 2, 'The full shared rules must appear exactly once on the landing page.');
   assert.match(client.html.slice(rulesStart), /<details class="rules-defaults">/);
   assert.match(client.html.slice(rulesStart), /href="rules\.pdf"/);
+  assert.match(rulesContent, /wyłącznie na końcu tury/);
+  assert.doesNotMatch(rulesContent, /Od razu po jego położeniu|od razu po położeniu kafelka/);
   const ids = [...(page + client.html).matchAll(/\bid="([^"]+)"/g)].map(match => match[1]);
   assert.equal(new Set(ids).size, ids.length, 'Copying rule contents must not duplicate document IDs.');
   client.openRules();
@@ -991,7 +993,7 @@ test('a real straight pawn move travels between measured anchors and duplicate u
   assert.equal(client.pendingTimers, 0);
 });
 
-test('flower rewards fly to their owner and only a real replacement draw animates the entering tile', () => {
+test('a flower earned before placement stays beside playable tiles and flies to its owner', async () => {
   let game = createGame(players, { seed: 1 });
   game.players[0].position = 13;
   game.board[13] = { ...pathTile, rotation: 0 };
@@ -1014,26 +1016,31 @@ test('flower rewards fly to their owner and only a real replacement draw animate
   assert.equal(effectTags(client.html, 'flower-flight').length, 1);
   client.advance(1);
   assert.equal(effectTags(client.html, 'flower-flight').length, 0);
-  game = applyAction(game, 'p0', { type: 'discard', tileId: game.players[0].hand[0].id });
-  const discarded = animationRoom(game, 3);
-  client.accept(discarded);
-  assert.equal(effectTags(client.html, 'drawn-tile').length, 0, 'Discarding a tile does not draw a replacement.');
-  const placement = discarded.game.legal.placements.find(action => !game.players[0].hand.find(tile => tile.id === action.tileId).ability) ?? discarded.game.legal.placements[0];
+  const hand = handSlots(client.html);
+  assert.equal(hand.tiles.length, 4);
+  assert.equal(hand.flowers.length, 1);
+  assert.equal(collected.game.turn.pending, null);
+  assert.ok(hand.tiles.every(tile => !/\bdisabled\b/.test(tile.split('>')[0])));
+  assert.doesNotMatch(client.html, /aria-label="Odrzuć:/);
+  assert.match(client.html, /Najpierw dołóż kafelek/);
+  const placement = collected.game.legal.placements.find(action => !game.players[0].hand.find(tile => tile.id === action.tileId).ability);
   assert.ok(placement);
-  const oldIds = game.players[0].hand.map(tile => tile.id);
-  game = applyAction(game, 'p0', { type: 'place', ...placement });
-  const placed = animationRoom(game, 4);
-  const newIds = game.players[0].hand.filter(tile => !oldIds.includes(tile.id)).map(tile => tile.id);
-  assert.equal(newIds.length, 1);
-  client.accept(placed);
-  assert.deepEqual(effectTags(client.html, 'drawn-tile').map(tag => tag.match(/data-tile="([^"]+)"/)?.[1]), newIds);
-  client.advance(100);
-  client.accept(structuredClone(placed));
-  client.render();
-  client.advance(219);
-  assert.equal(effectTags(client.html, 'drawn-tile').length, 1);
-  client.advance(1);
-  assert.equal(effectTags(client.html, 'drawn-tile').length, 0);
+  client.authenticate();
+  client.select(placement.tileId);
+  assert.equal(client.requests.length, 0, 'Selecting a tile after earning a flower must not submit a discard.');
+  client.cellEvent('click', placement.index);
+  assert.equal(client.requests.length, 1);
+  const request = JSON.parse(client.requests[0].body);
+  assert.equal(request.action.type, 'place');
+  assert.equal(request.action.tileId, placement.tileId);
+  game = applyAction(game, 'p0', request.action);
+  const ended = animationRoom(game, 3);
+  client.respond(ended);
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(game.currentPlayerId, 'p1');
+  assert.equal(game.players[0].hand.length, 3);
+  assert.equal(handSlots(client.html).flowers.length, 1);
+  assert.equal(effectTags(client.html, 'drawn-tile').length, 0, 'The flower fills the space left by placement; no replacement is needed.');
 
   let otherGame = createGame(players, { seed: 1 });
   otherGame.currentPlayerId = 'p1';
@@ -1049,6 +1056,41 @@ test('flower rewards fly to their owner and only a real replacement draw animate
   assert.equal(effectTags(other.html, 'flower-flight').length, 1);
   assert.match(effectTags(other.html, 'flower-flight')[0], /data-color="green"/);
   assert.equal(handSlots(other.html).flowers.length, 0, 'Another player’s flower must not enter the local hand.');
+});
+
+test('replacement tiles wait for end of turn and animate after control passes to the next player', () => {
+  let game = createGame(players, { seed: 1 });
+  const initial = animationRoom(game);
+  const placement = initial.game.legal.placements.find(action => action.index === 7 && action.rotation === 1 && game.players[0].hand.find(tile => tile.id === action.tileId).kind === 'tee');
+  assert.ok(placement);
+  const client = browser();
+  client.accept(initial);
+  const oldIds = new Set(game.players[0].hand.map(tile => tile.id));
+  game = applyAction(game, 'p0', { type: 'place', ...placement });
+  const placed = animationRoom(game, 2);
+  client.accept(placed);
+  assert.equal(game.currentPlayerId, 'p0');
+  assert.equal(handSlots(client.html).tiles.length, 3);
+  assert.equal(handSlots(client.html).empty.length, 1);
+  assert.equal(effectTags(client.html, 'drawn-tile').length, 0);
+  assert.ok(placed.game.legal.moves.includes(7));
+  game = applyAction(game, 'p0', { type: 'move', index: 7 });
+  const ended = animationRoom(game, 3);
+  client.accept(ended);
+  const newIds = game.players[0].hand.filter(tile => !oldIds.has(tile.id)).map(tile => tile.id);
+  assert.equal(game.currentPlayerId, 'p1');
+  assert.equal(newIds.length, 1);
+  assert.equal(handSlots(client.html).tiles.length, 4);
+  assert.equal(handSlots(client.html).empty.length, 0);
+  assert.deepEqual(effectTags(client.html, 'drawn-tile').map(tag => tag.match(/data-tile="([^"]+)"/)?.[1]), newIds);
+  assert.ok(handSlots(client.html).tiles.every(tile => /\bdisabled\b/.test(tile.split('>')[0])));
+  client.advance(100);
+  client.accept(structuredClone(ended));
+  client.render();
+  client.advance(219);
+  assert.equal(effectTags(client.html, 'drawn-tile').length, 1);
+  client.advance(1);
+  assert.equal(effectTags(client.html, 'drawn-tile').length, 0);
 });
 
 test('three earned flowers bloom once while initial, missed and reduced-motion updates stay still', () => {

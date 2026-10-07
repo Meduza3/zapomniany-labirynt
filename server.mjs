@@ -96,6 +96,33 @@ function validSavedPlayer(player) {
   return /^[a-f0-9]{64}$/.test(player.tokenHash);
 }
 
+function completedResult(room) {
+  if (room.status !== 'finished' || room.game?.status !== 'finished') return null;
+  const game = room.game;
+  return {
+    room_code: room.code,
+    room_created_at: new Date(room.createdAt).toISOString(),
+    finished_at: new Date(room.lastActivity).toISOString(),
+    turn_count: game.turnNumber,
+    players: game.players.map(({ id, name, color, flowers }) => ({ id, name, color, isBot: room.players.find(player => player.id === id)?.isBot === true, flowers: [...flowers] })),
+    starter_id: game.players[0].id,
+    winner_id: game.winnerId,
+    first_player_won: game.winnerId === game.players[0].id,
+  };
+}
+
+function resultKey(result) {
+  return JSON.stringify([result.room_code, result.room_created_at]);
+}
+
+function validSavedResult(result) {
+  const keys = ['room_code', 'room_created_at', 'finished_at', 'turn_count', 'players', 'starter_id', 'winner_id', 'first_player_won'];
+  if (!isObject(result) || Object.keys(result).length !== keys.length || keys.some(key => !Object.hasOwn(result, key))) return false;
+  if (!/^[A-Z2-9]{6}$/.test(result.room_code) || !Number.isFinite(Date.parse(result.room_created_at)) || !Number.isFinite(Date.parse(result.finished_at)) || !Number.isSafeInteger(result.turn_count) || result.turn_count < 1 || !Array.isArray(result.players) || result.players.length !== 4) return false;
+  if (result.players.some(player => !isObject(player) || Object.keys(player).length !== 5 || ['id', 'name', 'color', 'isBot', 'flowers'].some(key => !Object.hasOwn(player, key)) || typeof player.id !== 'string' || typeof player.name !== 'string' || !colors.includes(player.color) || typeof player.isBot !== 'boolean' || !Array.isArray(player.flowers) || player.flowers.some(color => !colors.includes(color) || color === player.color) || new Set(player.flowers).size !== player.flowers.length)) return false;
+  return result.starter_id === result.players[0].id && result.players.some(player => player.id === result.winner_id && player.flowers.length === 3) && result.first_player_won === (result.starter_id === result.winner_id);
+}
+
 function readBody(req, maxBodyBytes) {
   const type = req.headers['content-type']?.split(';')[0].trim().toLowerCase();
   if (type !== 'application/json') {
@@ -148,6 +175,7 @@ export async function createServer(options = {}) {
   const rateBuckets = new Map();
   const botTimers = new Map();
   let rooms = new Map();
+  let results = new Map();
   let queue = Promise.resolve();
   let closing = false;
   let closingPromise;
@@ -163,9 +191,23 @@ export async function createServer(options = {}) {
       if (rooms.has(room.code)) throw new Error('Powtórzony kod pokoju w zapisie.');
       rooms.set(room.code, room);
     }
+    if (stored.results !== undefined && !Array.isArray(stored.results)) throw new Error('Uszkodzony zapis wyników.');
+    for (const result of stored.results ?? []) {
+      if (!validSavedResult(result) || results.has(resultKey(result))) throw new Error('Uszkodzony zapis wyniku gry.');
+      results.set(resultKey(result), result);
+    }
   } catch (error) {
     if (error.code !== 'ENOENT') throw new Error(`Nie można odczytać zapisu gry: ${error.message}`, { cause: error });
   }
+  let backfilled = false;
+  for (const room of rooms.values()) {
+    const result = completedResult(room);
+    if (result && !results.has(resultKey(result))) {
+      results.set(resultKey(result), result);
+      backfilled = true;
+    }
+  }
+  if (backfilled) await persist(rooms, results);
 
   function json(res, status, value) {
     const data = JSON.stringify(value);
@@ -231,14 +273,12 @@ export async function createServer(options = {}) {
     for (const stream of streams.get(room.code) ?? []) sendEvent(stream, room);
   }
 
-  async function commit(room) {
-    const next = new Map(rooms);
-    next.set(room.code, room);
+  async function persist(next, nextResults) {
     const temporary = `${storagePath}.${randomUUID()}.tmp`;
     let handle;
     try {
       handle = await open(temporary, 'wx', 0o600);
-      await handle.writeFile(JSON.stringify({ version: 1, rooms: [...next.values()] }));
+      await handle.writeFile(JSON.stringify({ version: 1, rooms: [...next.values()], results: [...nextResults.values()] }));
       await handle.sync();
       await handle.close();
       handle = null;
@@ -249,6 +289,16 @@ export async function createServer(options = {}) {
       throw error;
     }
     rooms = next;
+    results = nextResults;
+  }
+
+  async function commit(room) {
+    const next = new Map(rooms);
+    next.set(room.code, room);
+    const nextResults = new Map(results);
+    const result = completedResult(room);
+    if (result && !nextResults.has(resultKey(result))) nextResults.set(resultKey(result), result);
+    await persist(next, nextResults);
     broadcast(room);
     scheduleBot(room);
   }

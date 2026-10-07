@@ -16,7 +16,7 @@ Four hand slots hold tiles and collected flowers together. One flower leaves roo
 
 Four players start in their own gardens. The board artwork fixes the green garden at the middle of the north edge, yellow at the east edge, blue at the south edge, and red at the west edge.
 
-After placing a tile, the player immediately receives a random replacement, up to the available hand capacity. When the draw stock runs out, the discarded tiles are shuffled into a new draw stock. There is no additional draw at the end of a turn or after a forced removal.
+At the end of a turn, after both actions and any optional tool or required discard are resolved, the outgoing player draws random tiles until tiles and flowers together occupy four hand slots. No replacement is drawn immediately after placement. A newly collected flower can therefore use the slot released by that turn’s placement. The end-of-turn refill also applies after forced removal. When the draw stock runs out, discarded tiles are shuffled into a new draw stock; if both are empty, the hand remains short.
 
 A bridge consists of two separate straight paths. Sight travels straight along either path and cannot switch between the bridge's paths. The implementation remembers which path a pawn entered, so the pawn also stays on that path when it moves again.
 
@@ -26,15 +26,15 @@ Movement may be skipped only when no move is possible. This is checked after the
 
 The following operational details are not specified explicitly in the instruction sheet. They are recorded here to make the adaptation reviewable.
 
-The 60 printed fronts form one shuffled common stock. Each player initially draws four tiles. The north/green player goes first; turns proceed east/yellow, south/blue, then west/red. Hands are private. Players may occupy the same space and pass one another because no collision restriction is stated.
+The 60 printed fronts form one shuffled common stock. Each player initially draws four tiles. The first lobby seat goes first, and turns follow lobby seat order. Choosing another garden color does not change turn order. Hands are private. Players may occupy the same space and pass one another because no collision restriction is stated.
 
 Printed gardens are fixed board spaces and cannot be removed, covered, rotated, or forgotten. The first empty space reached by a sight ray is a legal placement frontier. A new tile must also be visible through an open edge after it is placed; a hedge-facing edge cannot make an otherwise invisible tile legal. One-way arrows affect movement, not sight. A pawn on a tree crossing can see and depart in every open direction, while a ray arriving from elsewhere stops at that tree.
 
 The double-bend artwork has two disconnected paths, north–east and south–west before rotation. A pawn stays on its entered path, as on a bridge. A T junction permits straight sight and longer movement along its crossbar, while an approach along the stem ends at the junction. Starting a later movement from that junction allows any connected exit.
 
-If a newly collected flower makes the hand too large, the player chooses which tile to discard before continuing the turn. No automatic random discard occurs. Winning with a third flower finishes the game immediately, without requiring a subsequent discard or end-turn action.
+A flower collected before placement may temporarily increase the hand beyond four combined items. The player completes the tile action and any optional tool first. Only if the hand still exceeds capacity after both actions does the player choose excess tiles to discard before the end-of-turn refill. This can happen after forced removal, which does not spend a hand tile. Existing saved discard decisions remain playable. No automatic random discard occurs. Winning with a third flower finishes the game immediately, without requiring a subsequent discard or end-turn action.
 
-Forgetting is applied after each complete movement or tile action. A newly placed optional tool is resolved before the next movement or automatic turn completion. Placement redraw happens immediately, even while that tool choice is pending. A tool may be skipped. All unoccupied movable tiles are eligible secateurs targets; rotation additionally requires the result to remain visible. A target cannot be the tool tile that was just placed.
+Forgetting is applied after each complete movement or tile action. A newly placed optional tool is resolved before the next movement or automatic turn completion. Refilling waits until all turn actions and decisions are complete. A tool may be skipped. All unoccupied movable tiles are eligible secateurs targets; rotation additionally requires the result to remain visible. A target cannot be the tool tile that was just placed.
 
 ## 4. Exact inventory from the print sheets
 
@@ -59,6 +59,6 @@ The host may fill empty lobby seats with bots or remove lobby bots before the ga
 
 ## 6. Verification
 
-`node --test test/engine.test.mjs` checks inventory, setup, private views, legal action order, sight, movement, both disconnected crossing shapes, one-way edges, forgetting, tool protection and cascades, forced removal, flower collection and discarding, immediate victory, replacement draws, reshuffling, blocked movement, and state immutability.
+`node --test test/engine.test.mjs` checks inventory, setup, private views, legal action order, sight, movement, both disconnected crossing shapes, one-way edges, forgetting, tool protection and cascades, forced removal, flower collection and discarding, immediate victory, end-of-turn draws, reshuffling, blocked movement, and state immutability.
 
 The source documents remain available from the application's rules panel. Future rule changes should update the engine and its behavior tests together with this record.

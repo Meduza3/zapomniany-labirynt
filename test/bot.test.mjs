@@ -33,14 +33,23 @@ test('bots do nothing outside their own active turn or after the game ends', () 
 });
 
 test('a bot collects an available missing flower before spending its tile action', () => {
-  const game = scene();
+  let game = scene();
   game.board[13] = { ...tile('garden'), color: 'yellow' };
   game.board[11] = { ...tile('garden'), color: 'red' };
   game.players[0].flowers = ['red'];
+  game.players[0].hand = [tile(), tile(), tile()];
+  const beforeDeck = game.deck.length;
   assert.deepEqual(choose(game), { type: 'move', index: 13 });
   const moved = advance(game);
   assert.deepEqual(moved.players[0].flowers, ['red', 'yellow']);
   assert.equal(moved.turn.placed, false);
+  assert.equal(moved.turn.pending, null);
+  assert.equal(moved.players[0].hand.length, 3);
+  assert.equal(choose(moved).type, 'place');
+  game = advance(moved);
+  assert.equal(game.currentPlayerId, 'p1');
+  assert.equal(game.players[0].hand.length, 2);
+  assert.equal(game.deck.length, beforeDeck);
 });
 
 test('a bot takes an immediate third-flower win and recognizes flowers crossed en route', () => {
@@ -66,15 +75,18 @@ test('a bot places a missing path before moving over it into a garden', () => {
   assert.equal(action.type, 'place');
   assert.equal(action.index, 1);
   assert.ok([0, 2].includes(action.rotation));
+  const beforeDeck = game.deck.length;
   game = advance(game);
+  assert.equal(game.players[0].hand.length, 0);
+  assert.equal(game.deck.length, beforeDeck);
   assert.deepEqual(choose(game), { type: 'move', index: 2 });
   game = advance(game);
   assert.deepEqual(game.players[0].flowers, ['yellow']);
-  assert.equal(game.currentPlayerId, 'p0');
-  assert.equal(game.turn.pending.kind, 'discard');
-  game = advance(game);
+  assert.equal(game.turn.pending, null);
   assert.equal(game.currentPlayerId, 'p1');
   assert.equal(game.turnNumber, 2);
+  assert.equal(game.players[0].hand.length, 3);
+  assert.equal(game.deck.length, beforeDeck - 3);
 });
 
 test('a bot can move before placing when its next turn of the path is already available', () => {
@@ -84,12 +96,14 @@ test('a bot can move before placing when its next turn of the path is already av
   assert.deepEqual(choose(game), { type: 'move', index: 13 });
 });
 
-test('flower overflow discards a legal own tile and retains the more flexible tile', () => {
+test('a legacy flower discard chooses a legal own tile and retains the more flexible tile', () => {
   let game = scene();
   game.board[13] = { ...tile('garden'), color: 'yellow' };
   const oneWay = tile('oneway');
   game.players[0].hand = [tile('tee'), tile('corner'), oneWay, tile('straight', 0, 'shovel')];
-  game = applyAction(game, 'p0', { type: 'move', index: 13 });
+  game.players[0].position = 13;
+  game.players[0].flowers = ['yellow'];
+  game.turn = { moved: true, placed: false, pending: { kind: 'discard', index: 13 } };
   assert.deepEqual(choose(game), { type: 'discard', tileId: oneWay.id });
   game = advance(game);
   assert.equal(game.players[0].hand.length, 3);

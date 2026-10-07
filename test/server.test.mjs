@@ -219,8 +219,8 @@ test('simultaneous actions at the same revision commit exactly one legal change'
   const accepted = results.find(result => result.status === 200).data;
   assert.equal(accepted.revision, view.revision + 1);
   assert.equal(accepted.game.board[placement.index].id, placement.tileId);
-  assert.equal(accepted.game.deckCount, view.game.deckCount - 1);
-  assert.equal(accepted.game.players.find(player => player.id === current.playerId).hand.length, 4);
+  assert.equal(accepted.game.deckCount, view.game.deckCount);
+  assert.equal(accepted.game.players.find(player => player.id === current.playerId).hand.length, 3);
   const saved = JSON.parse(await readFile(path.join(app.dataDir, 'rooms.json'), 'utf8'));
   assert.equal(saved.rooms[0].revision, accepted.revision);
   assert.equal(saved.rooms[0].game.board[placement.index].id, placement.tileId);
@@ -555,4 +555,126 @@ test('joins and bots use remaining colors, bot removal preserves choices, and ga
   const before = await readFile(storagePath, 'utf8');
   assert.equal((await app.request(endpoint, { method: 'POST', token: host.token, body: { color: 'blue' } })).status, 409);
   assert.equal(await readFile(storagePath, 'utf8'), before);
+});
+
+async function nearCompletedRoom(app, { winnerSeat = 0, bots = false, turnCount = 17 } = {}) {
+  const host = await createRoom(app, 'Pierwszy');
+  assert.equal((await app.request(`/api/rooms/${host.code}/color`, { method: 'POST', token: host.token, body: { color: 'red' } })).status, 200);
+  const sessions = [host];
+  if (bots) assert.equal((await app.request(`/api/rooms/${host.code}/bots`, { method: 'POST', token: host.token, body: { count: 3 } })).status, 200);
+  else for (const name of ['Drugi', 'Trzeci', 'Czwarty']) sessions.push(await joinRoom(app, host.code, name));
+  assert.equal((await app.request(`/api/rooms/${host.code}/start`, { method: 'POST', token: host.token, body: {} })).status, 200);
+  await app.server.closeGracefully();
+  const storagePath = path.join(app.dataDir, 'rooms.json');
+  const stored = JSON.parse(await readFile(storagePath, 'utf8'));
+  const room = stored.rooms.find(item => item.code === host.code);
+  const game = room.game;
+  const colors = ['green', 'yellow', 'blue', 'red'];
+  game.players.forEach((player, index) => {
+    player.flowers = colors.filter(color => color !== player.color).slice(0, index % 3);
+  });
+  const winner = game.players[winnerSeat];
+  const targets = colors.filter(color => color !== winner.color);
+  winner.flowers = targets.slice(0, 2);
+  const destination = game.board.findIndex(tile => tile?.kind === 'garden' && tile.color === targets[2]);
+  const origin = { 2: 7, 14: 13, 22: 17, 10: 11 }[destination];
+  const tileIndex = game.deck.findIndex(tile => tile.kind === 'straight' && !tile.ability);
+  const [tile] = game.deck.splice(tileIndex, 1);
+  game.board[origin] = { ...tile, rotation: origin === 7 || origin === 17 ? 1 : 0 };
+  winner.position = origin;
+  winner.entry = null;
+  game.currentPlayerId = winner.id;
+  game.turnNumber = turnCount;
+  game.turn = { moved: false, placed: false, pending: null };
+  room.revision += 1;
+  await writeFile(storagePath, JSON.stringify(stored));
+  return { host, sessions, storagePath, room, winner, destination };
+}
+
+function assertGameResult(result, room) {
+  assert.deepEqual(Object.keys(result).sort(), ['room_code', 'room_created_at', 'finished_at', 'turn_count', 'players', 'starter_id', 'winner_id', 'first_player_won'].sort());
+  assert.equal(result.room_code, room.code);
+  assert.equal(Date.parse(result.room_created_at), room.createdAt);
+  assert.equal(Date.parse(result.finished_at), room.lastActivity);
+  assert.equal(result.turn_count, room.game.turnNumber);
+  assert.equal(result.starter_id, room.game.players[0].id);
+  assert.equal(result.winner_id, room.game.winnerId);
+  assert.equal(result.first_player_won, room.game.winnerId === room.game.players[0].id);
+  assert.deepEqual(result.players, room.game.players.map(({ id, name, color, flowers }) => ({ id, name, color, isBot: room.players.find(player => player.id === id).isBot === true, flowers })));
+  for (const player of result.players) assert.deepEqual(Object.keys(player).sort(), ['id', 'name', 'color', 'isBot', 'flowers'].sort());
+}
+
+test('a completed human game saves one private result with every flower and preserves it after restart and room cleanup', async t => {
+  const app = await fixture(t);
+  const { host, storagePath, room, destination } = await nearCompletedRoom(app);
+  assert.deepEqual(JSON.parse(await readFile(storagePath, 'utf8')).results ?? [], []);
+  await app.start();
+  const body = { revision: room.revision, action: { type: 'move', index: destination } };
+  const won = await app.request(`/api/rooms/${room.code}/actions`, { method: 'POST', token: host.token, body });
+  assert.equal(won.status, 200);
+  assert.equal(won.data.status, 'finished');
+  const saved = JSON.parse(await readFile(storagePath, 'utf8'));
+  assert.equal(saved.results?.length, 1, 'The winning room snapshot must atomically contain exactly one completed-game result.');
+  assertGameResult(saved.results[0], saved.rooms[0]);
+  assert.equal(saved.results[0].players[0].color, 'red');
+  assert.equal(saved.results[0].first_player_won, true);
+  assert.equal((await app.request(`/api/rooms/${room.code}/actions`, { method: 'POST', token: host.token, body })).status, 409);
+  assert.deepEqual(JSON.parse(await readFile(storagePath, 'utf8')).results, saved.results);
+  assert.equal(Object.hasOwn(won.data, 'results'), false);
+  assert.equal((await app.request('/api/results', { token: host.token })).status, 404);
+  await app.server.closeGracefully();
+  await app.start();
+  assert.deepEqual(JSON.parse(await readFile(storagePath, 'utf8')).results, saved.results);
+  await app.server.closeGracefully();
+  await writeFile(storagePath, JSON.stringify({ ...saved, rooms: [] }));
+  await app.start();
+  await createRoom(app, 'Nowy pokój');
+  const retained = JSON.parse(await readFile(storagePath, 'utf8'));
+  assert.equal(retained.rooms.length, 1);
+  assert.deepEqual(retained.results, saved.results);
+});
+
+test('a bot winning a later seat records the same final statistics and does not count as the starting player', async t => {
+  const app = await fixture(t, { botDelayMs: 5 });
+  const { host, storagePath } = await nearCompletedRoom(app, { winnerSeat: 1, bots: true, turnCount: 26 });
+  await app.start();
+  const won = await waitForView(app, host, view => view.status === 'finished');
+  const saved = JSON.parse(await readFile(storagePath, 'utf8'));
+  assert.equal(saved.results?.length, 1);
+  assertGameResult(saved.results[0], saved.rooms[0]);
+  assert.equal(saved.results[0].first_player_won, false);
+  assert.equal(saved.results[0].turn_count, 26);
+  assert.equal(saved.results[0].players[1].isBot, true);
+  assert.equal(saved.results[0].winner_id, won.game.players[1].id);
+  await app.server.closeGracefully();
+  await app.start();
+  assert.deepEqual(JSON.parse(await readFile(storagePath, 'utf8')).results, saved.results);
+});
+
+test('legacy finished rooms are backfilled once and reusing their code creates a separate match result', async t => {
+  const app = await fixture(t);
+  const { storagePath, room, winner } = await nearCompletedRoom(app, { turnCount: 33 });
+  room.status = room.game.status = 'finished';
+  room.game.winnerId = winner.id;
+  winner.flowers = ['green', 'yellow', 'blue'];
+  room.lastActivity = room.createdAt + 5_000;
+  await writeFile(storagePath, JSON.stringify({ version: 1, rooms: [room] }));
+  await app.start();
+  const first = JSON.parse(await readFile(storagePath, 'utf8'));
+  assert.equal(first.results?.length, 1);
+  assertGameResult(first.results[0], room);
+  await app.server.closeGracefully();
+  const reused = structuredClone(room);
+  reused.createdAt += 10_000;
+  reused.lastActivity += 10_000;
+  reused.game.turnNumber = 41;
+  await writeFile(storagePath, JSON.stringify({ ...first, rooms: [reused] }));
+  await app.start();
+  const second = JSON.parse(await readFile(storagePath, 'utf8'));
+  assert.equal(second.results.length, 2);
+  assert.deepEqual(second.results[0], first.results[0]);
+  assertGameResult(second.results[1], reused);
+  await app.server.closeGracefully();
+  await app.start();
+  assert.deepEqual(JSON.parse(await readFile(storagePath, 'utf8')).results, second.results);
 });
