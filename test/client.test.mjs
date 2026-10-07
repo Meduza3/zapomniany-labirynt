@@ -44,6 +44,9 @@ function browser({ reducedMotion = false, random = () => 0, tabStorage = storage
     };
   }
   const main = element(), connection = element(), span = element(), inlineRules = element(), sharedRules = element();
+  const finishSummary = element(), summaryScrolls = [], summaryFocuses = [];
+  finishSummary.scrollIntoView = options => summaryScrolls.push({ behavior: options.behavior, block: options.block });
+  finishSummary.focus = options => summaryFocuses.push({ preventScroll: options.preventScroll });
   const workers = [], observers = [], windowListeners = new Map(), demoPawns = new Map();
   const demoRoot = element(), demoBoard = element(), demoGrid = element(), demoOverlay = element(), demoControl = element();
   let mainWrites = 0, mainMarkup = '';
@@ -79,6 +82,7 @@ function browser({ reducedMotion = false, random = () => 0, tabStorage = storage
   main.querySelector = selector => {
     if (previewWorker && selector === '#homepage-preview' && main.innerHTML.includes('id="homepage-preview"')) return demoRoot;
     if (selector === '#landing-rules' && main.innerHTML.includes('id="landing-rules"')) return inlineRules;
+    if (selector === '#match-summary' && main.innerHTML.includes('id="match-summary"')) return finishSummary;
     if (fields.has(selector)) return fields.get(selector);
     if (Object.hasOwn(geometry, selector)) return { getBoundingClientRect: () => geometry[selector], style: {} };
     const motionId = selector.match(/^\[data-motion-id="([^"]+)"\]$/)?.[1];
@@ -208,6 +212,7 @@ function browser({ reducedMotion = false, random = () => 0, tabStorage = storage
     get requests() { return requestLog; },
     get motionStyles() { return motionStyles; },
     get rulesNavigation() { return { focused: !!inlineRules.focused, scrolled: !!inlineRules.scrolled, modal: elements.get('#rules-dialog').open }; },
+    get summaryNavigation() { return { scrolls: summaryScrolls, focuses: summaryFocuses }; },
   };
 }
 function assertGrowing(client, index, elapsed) {
@@ -1182,6 +1187,66 @@ test('three earned flowers bloom once while initial, missed and reduced-motion u
   cancelled.motion(false);
   cancelled.render();
   assert.equal(effectTags(cancelled.html, 'victory-flower').length, 0);
+});
+
+test('finished match statistics show total turns, final flowers and the actual starting player after restore', () => {
+  for (const winnerId of ['p0', 'p1']) {
+    const seated = players.map((player, index) => ({ ...player, color: ['blue', 'green', 'yellow', 'red'][index] }));
+    seated[0].name = '<Ala & Ela>';
+    seated[1].name = 'Bot <Ogród>';
+    const game = createGame(seated, { seed: 1 });
+    game.players[1].isBot = true;
+    const playing = animationRoom(game);
+    const reducedMotion = winnerId === 'p1';
+    const client = browser({ reducedMotion });
+    client.accept(playing);
+    assert.doesNotMatch(client.html, /match-summary|Statystyki rozgrywki|Rozpoczynał|Czy wygrał rozpoczynający/);
+    game.status = 'finished';
+    game.winnerId = winnerId;
+    game.turnNumber = 37;
+    game.players.forEach((player, index) => {
+      player.flowers = game.players.filter(other => other.color !== player.color).map(other => other.color).slice(0, player.id === winnerId ? 3 : index % 3);
+    });
+    const finished = animationRoom(game, 2);
+    client.accept(finished);
+    assert.deepEqual(client.summaryNavigation, { scrolls: [{ behavior: reducedMotion ? 'auto' : 'smooth', block: 'start' }], focuses: [{ preventScroll: true }] });
+    function summary(html) {
+      const content = html.match(/<section[^>]*class="[^"]*match-summary[^>]*>([\s\S]*?)<\/section>/)?.[1];
+      assert.ok(content, 'A finished game must visibly show its match statistics.');
+      return content;
+    }
+    const stats = summary(client.html);
+    assert.match(stats, /Statystyki rozgrywki/);
+    assert.match(stats, /<dt>Tury<\/dt><dd[^>]*>37<\/dd>/);
+    assert.match(stats, /&lt;Ala &amp; Ela&gt;.*niebieski/);
+    assert.match(stats, new RegExp(`<dt>Czy wygrał rozpoczynający\\?<\\/dt><dd[^>]*>${winnerId === 'p0' ? 'Tak' : 'Nie'}<\\/dd>`));
+    assert.doesNotMatch(stats, /<Ala|<Ogród>/);
+    const cards = [...stats.matchAll(/<article[^>]*data-player-id="([^"]+)"[^>]*>([\s\S]*?)<\/article>/g)];
+    assert.equal(cards.length, 4, 'Reuse exactly four final player cards in the summary.');
+    for (const [, id, card] of cards) {
+      const player = game.players.find(item => item.id === id);
+      assert.equal((card.match(/role="img" aria-label="Kwiat /g) || []).length, player.flowers.length);
+      assert.equal(card.includes('Wygrał'), id === winnerId);
+      assert.equal(card.includes('Rozpoczynał'), id === 'p0');
+    }
+    assert.equal((client.html.match(/<article class="player-card/g) || []).length, 4);
+    client.advance(1000);
+    client.accept(structuredClone(finished));
+    const settled = summary(client.html);
+    client.render();
+    assert.equal(summary(client.html), settled);
+    assert.equal(client.summaryNavigation.scrolls.length, 1, 'Duplicate views and animation cleanup must not scroll again.');
+    assert.equal(client.summaryNavigation.focuses.length, 1);
+    const restored = browser();
+    restored.accept(structuredClone(finished));
+    assert.equal(summary(restored.html), settled);
+    assert.equal(restored.summaryNavigation.scrolls.length, 0, 'Restoring a finished game must not steal focus or scroll.');
+    assert.equal(restored.summaryNavigation.focuses.length, 0);
+    const otherRoom = browser();
+    otherRoom.accept(playing);
+    otherRoom.accept({ ...finished, code: 'XYZ789' });
+    assert.equal(otherRoom.summaryNavigation.scrolls.length, 0);
+  }
 });
 
 function previewFrame(game) {

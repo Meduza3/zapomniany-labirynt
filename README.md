@@ -88,6 +88,8 @@ The integration harness covers automatic bot turns, lease recovery, private comp
 
 ## Completed-game statistics
 
+The finished-game screen shows total player turns, the starting player's name and color, whether that player won, and every player's final flowers. Winner and starter labels appear beside the existing player cards. A newly finished game brings the summary into view once, using an immediate scroll with reduced motion. The summary stays visible when a finished room is reopened or refreshed.
+
 Every finished game records one private result automatically on the backend, including wins by bots. On Supabase, open **Table Editor → game_results** in the project dashboard. Local Node hosting stores the same records in the top-level `results` array in `DATA_DIR/rooms.json`.
 
 Each result contains the room code and creation time, finish time, `turn_count`, ordered player results with names, colors, bot status and final flower colors, `starter_id`, `winner_id`, and `first_player_won`. Turn count means individual player turns, including the winning turn, not complete four-player rounds. The starter is the first player in turn order, regardless of garden color.

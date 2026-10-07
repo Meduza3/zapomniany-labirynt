@@ -871,3 +871,23 @@ dialog h2 { margin: 9px 0 12px; color: #604623; font-family: var(--display); fon
   .live-preview *, .live-preview *:before, .live-preview *:after { animation: none !important; }
   .preview-toggle { display: none; }
 }
+
+.match-summary { margin-bottom: 19px; padding: 17px 20px; }
+.match-summary h3 { margin: 0 0 12px; color: #614620; font-family: var(--display); font-size: 21px; font-weight: 400; }
+.match-summary dl { display: grid; grid-template-columns: 70px minmax(0, 1fr) minmax(0, 1fr); gap: 16px; margin: 0 0 16px; }
+.match-summary dt { margin-bottom: 5px; color: #78603a; font-size: 11px; font-weight: 800; }
+.match-summary dd { margin: 0; color: #3c4c29; font-size: 16px; font-weight: 900; overflow-wrap: anywhere; }
+.summary-color { display: inline-block; width: 12px; height: 12px; margin-right: 6px; border: 1px solid #79643c; border-radius: 50%; background: var(--pawn); vertical-align: 0; }
+.match-summary .players-strip { margin-bottom: 0; }
+.match-summary .player-card { flex-wrap: wrap; align-items: flex-start; }
+.match-summary .winner-card { border-color: #e5bd51; background: linear-gradient(#49683a, #294c2b); box-shadow: inset 0 0 0 1px #e4c86766; }
+.player-results { display: flex; flex-wrap: wrap; gap: 3px 7px; margin-top: 4px; color: #f4d786; font-size: 9px; font-weight: 800; }
+.match-summary .player-card .flowers { position: static; display: flex; flex-basis: 100%; justify-content: center; gap: 5px; margin: 3px 0 0; }
+.match-summary .player-card .flower { width: 17px; height: 20px; font-size: 22px; }
+@media (max-width: 620px) {
+  .match-summary { padding: 14px; }
+  .match-summary dl { grid-template-columns: 50px minmax(0, 1fr); gap: 12px; }
+  .match-summary dl > div:last-child { grid-column: 1 / -1; display: flex; align-items: baseline; gap: 10px; }
+  .match-summary dd { font-size: 14px; }
+  .match-summary .players-strip { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
