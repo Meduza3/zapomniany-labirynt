@@ -29,7 +29,7 @@ function storage() {
   const values = new Map();
   return { getItem: key => values.get(key) ?? null, setItem: (key, value) => values.set(key, String(value)), removeItem: key => values.delete(key) };
 }
-function browser({ reducedMotion = false, random = () => 0, tabStorage = storage(), durableStorage = storage(), pathname = '/', config, geometry = {} } = {}) {
+function browser({ reducedMotion = false, random = () => 0, tabStorage = storage(), durableStorage = storage(), pathname = '/', config, geometry = {}, previewWorker = false } = {}) {
   let now = 10000, timerId = 0;
   const timers = new Map(), requests = [], requestLog = [], mediaListeners = new Set(), documentListeners = new Map(), navigations = [], copiedInvites = [];
   function element() {
@@ -44,9 +44,40 @@ function browser({ reducedMotion = false, random = () => 0, tabStorage = storage
     };
   }
   const main = element(), connection = element(), span = element(), inlineRules = element(), sharedRules = element();
+  const workers = [], observers = [], windowListeners = new Map(), demoPawns = new Map();
+  const demoRoot = element(), demoBoard = element(), demoGrid = element(), demoOverlay = element(), demoControl = element();
+  let mainWrites = 0, mainMarkup = '';
+  Object.defineProperty(main, 'innerHTML', { get: () => mainMarkup, set(value) { mainMarkup = value; mainWrites++; } });
+  demoControl.setAttribute = (name, value) => { demoControl[name] = value; };
+  demoRoot.querySelector = selector => selector === '[data-demo-board]' ? demoBoard : selector === '[data-demo-pause]' ? demoControl : null;
+  demoBoard.querySelector = selector => selector === '.preview-grid' ? demoGrid : selector === '.preview-pawns' && demoPawns.size ? demoOverlay : null;
+  demoOverlay.querySelector = selector => demoPawns.get(selector.match(/data-demo-pawn="([^"]+)"/)?.[1]) ?? null;
+  Object.defineProperty(demoBoard, 'innerHTML', { set(value) {
+    demoGrid.innerHTML = value.match(/<div class="preview-grid">([\s\S]*?)<\/div><div class="preview-pawns"/)?.[1] ?? '';
+    demoPawns.clear();
+    for (const [tag, id] of value.matchAll(/<span\b[^>]*data-demo-pawn="([^"]+)"[^>]*>/g)) {
+      const pawn = element();
+      pawn.className = tag.match(/class="([^"]*)"/)[1];
+      pawn.style.cssText = tag.match(/style="([^"]*)"/)[1];
+      pawn.setAttribute = (name, value) => { pawn[name] = value; };
+      demoPawns.set(id, pawn);
+    }
+  } });
+  class PreviewWorker {
+    constructor(url) { this.url = String(url); this.messages = []; this.terminated = false; workers.push(this); }
+    postMessage(message) { this.messages.push(structuredClone(message)); }
+    terminate() { this.terminated = true; }
+    reply(frame, action = null, generation = this.messages.at(-1).generation) { this.onmessage({ data: { type: 'frame', generation, frame: structuredClone(frame), action } }); }
+  }
+  class PreviewObserver {
+    constructor(callback) { this.callback = callback; observers.push(this); }
+    observe() {}
+    disconnect() { this.disconnected = true; }
+  }
   sharedRules.innerHTML = rulesContent;
   const fields = new Map(), motionStyles = new Map();
   main.querySelector = selector => {
+    if (previewWorker && selector === '#homepage-preview' && main.innerHTML.includes('id="homepage-preview"')) return demoRoot;
     if (selector === '#landing-rules' && main.innerHTML.includes('id="landing-rules"')) return inlineRules;
     if (fields.has(selector)) return fields.get(selector);
     if (Object.hasOwn(geometry, selector)) return { getBoundingClientRect: () => geometry[selector], style: {} };
@@ -65,8 +96,10 @@ function browser({ reducedMotion = false, random = () => 0, tabStorage = storage
     removeEventListener(type, callback) { if (type === 'change') mediaListeners.delete(callback); },
   };
   const context = createContext({
-    document: { querySelector: selector => elements.get(selector) ?? main.querySelector(selector), activeElement: null, addEventListener: (type, callback) => documentListeners.set(type, callback) },
-    window: { matchMedia: () => media, scrollTo() {}, LABIRYNT_CONFIG: config },
+    document: { querySelector: selector => elements.get(selector) ?? main.querySelector(selector), activeElement: null, hidden: false, addEventListener: (type, callback) => documentListeners.set(type, callback) },
+    window: { matchMedia: () => media, scrollTo() {}, LABIRYNT_CONFIG: config, addEventListener: (type, callback) => windowListeners.set(type, callback) },
+    Worker: previewWorker ? PreviewWorker : undefined,
+    IntersectionObserver: previewWorker ? PreviewObserver : undefined,
     location: { search: '', origin: 'https://garden.example', pathname }, history: { replaceState(state, title, url) { navigations.push(url); } },
     navigator: { clipboard: { async writeText(value) { copiedInvites.push(value); } } },
     localStorage: durableStorage, sessionStorage: tabStorage,
@@ -97,6 +130,13 @@ function browser({ reducedMotion = false, random = () => 0, tabStorage = storage
     home() { runInContext('home()', context); },
     share() { return runInContext('copyInvite()', context); },
     openRules() { elements.get('#rules-open').listeners.get('click')(); },
+    previewVisible(value) { observers.at(-1)?.callback([{ isIntersecting: value }]); },
+    pageVisible(value) { context.document.hidden = !value; documentListeners.get('visibilitychange')(); },
+    pageHide() { windowListeners.get('pagehide')(); },
+    pausePreview() {
+      const button = { disabled: false, hasAttribute: name => name === 'data-demo-pause' };
+      main.listeners.get('click')({ target: { closest: () => button } });
+    },
     closeRules() { elements.get('[data-close-dialog]').listeners.get('click')(); },
     typeName(value) { fields.set('#player-name', { value }); },
     form(mode) {
@@ -155,6 +195,11 @@ function browser({ reducedMotion = false, random = () => 0, tabStorage = storage
       return match[0];
     },
     get html() { return main.innerHTML; },
+    get workers() { return workers; },
+    get previewHTML() { return demoGrid.innerHTML; },
+    get previewPawns() { return demoPawns; },
+    get mainWrites() { return mainWrites; },
+    get typedName() { return fields.get('#player-name')?.value; },
     get tabStorage() { return tabStorage; },
     get durableStorage() { return durableStorage; },
     get navigations() { return navigations; },
@@ -1137,4 +1182,132 @@ test('three earned flowers bloom once while initial, missed and reduced-motion u
   cancelled.motion(false);
   cancelled.render();
   assert.equal(effectTags(cancelled.html, 'victory-flower').length, 0);
+});
+
+function previewFrame(game) {
+  return { board: structuredClone(game.board), players: game.players.map(({ id, name, color, position, entry, flowers }) => ({ id, name, color, position, entry, flowers: [...flowers] })), currentPlayerId: game.currentPlayerId, turnNumber: game.turnNumber, status: game.status, winnerId: game.winnerId };
+}
+
+test('homepage bot frames update only the miniature and retain pawn nodes while the form is being used', () => {
+  const client = browser({ previewWorker: true, pathname: '/labirynt/' });
+  assert.equal(client.workers.length, 0, 'The offscreen preview must not create a worker.');
+  client.previewVisible(true);
+  const worker = client.workers[0];
+  assert.ok(worker, 'A visible homepage must start its isolated game worker.');
+  assert.equal(worker.url, 'https://garden.example/labirynt/preview-worker.js');
+  assert.equal(worker.messages[0].type, 'start');
+  let game = createGame(players, { seed: 1 });
+  worker.reply(previewFrame(game));
+  client.typeName('Nadal piszę');
+  const writes = client.mainWrites;
+  const pawn = client.previewPawns.get('p0');
+  client.advance(1399);
+  assert.equal(worker.messages.length, 1);
+  client.advance(1);
+  assert.equal(worker.messages[1].type, 'step');
+  const action = { type: 'place', ...viewFor(game, 'p0').legal.placements.find(item => item.tileId === 'tile-3-4-5' && item.index === 1 && item.rotation === 0) };
+  game = applyAction(game, 'p0', action);
+  worker.reply(previewFrame(game), action);
+  assert.match(client.previewHTML, /class="placed-tile"/);
+  assert.equal(client.mainWrites, writes, 'Worker frames must not replace the form.');
+  assert.equal(client.typedName, 'Nadal piszę');
+  assert.equal(client.previewPawns.get('p0'), pawn, 'Pawn overlays must retain their DOM identity.');
+  client.advance(1400);
+  game = applyAction(game, 'p0', { type: 'move', index: 1 });
+  worker.reply(previewFrame(game), { type: 'move', index: 1 });
+  assert.match(pawn.className, /demo-pawn-moving/);
+  assert.match(pawn.style.cssText, /--from-x:50%/);
+  assert.match(pawn.style.cssText, /--exit-x:40%/);
+  assert.match(pawn.style.cssText, /--entry-x:40%/);
+  assert.match(pawn.style.cssText, /--to-x:30%/);
+  assert.equal(client.requests.length, 0, 'The simulated game must never call the room API.');
+});
+
+test('homepage animation pauses offscreen, in hidden pages and by choice, then stops outside the homepage', () => {
+  const client = browser({ previewWorker: true });
+  client.previewVisible(true);
+  const worker = client.workers[0];
+  assert.ok(worker, 'A visible homepage must start its isolated game worker.');
+  let game = createGame(players, { seed: 1 });
+  game = applyAction(game, 'p0', { type: 'place', tileId: 'tile-3-4-5', index: 1, rotation: 0 });
+  worker.reply(previewFrame(game));
+  client.previewVisible(false);
+  client.advance(5000);
+  assert.equal(worker.messages.length, 1);
+  client.previewVisible(true);
+  client.pageVisible(false);
+  client.advance(5000);
+  assert.equal(worker.messages.length, 1);
+  client.pageVisible(true);
+  client.pausePreview();
+  client.advance(5000);
+  assert.equal(worker.messages.length, 1);
+  client.pausePreview();
+  client.advance(1400);
+  assert.equal(worker.messages.length, 2);
+  const before = client.previewHTML;
+  worker.reply(previewFrame(createGame(players, { seed: 2 })), null, -1);
+  assert.equal(client.previewHTML, before, 'Stale generations cannot overwrite the miniature.');
+  client.pageVisible(false);
+  game = applyAction(game, 'p0', { type: 'move', index: 1 });
+  worker.reply(previewFrame(game), { type: 'move', index: 1 });
+  assert.ok([...client.previewPawns.values()].every(pawn => !pawn.className.includes('demo-pawn-moving')));
+  client.advance(5000);
+  assert.equal(worker.messages.length, 2, 'An in-flight reply on a hidden page cannot schedule more work.');
+  client.pageVisible(true);
+  client.advance(1400);
+  assert.equal(worker.messages.length, 3, 'Resuming schedules exactly one step.');
+  const lobby = roomView();
+  lobby.status = 'lobby';
+  lobby.game = null;
+  client.accept(lobby);
+  assert.equal(worker.terminated, true);
+  const lobbyHTML = client.html;
+  worker.reply(previewFrame(createGame(players, { seed: 3 })));
+  client.advance(5000);
+  assert.equal(client.html, lobbyHTML);
+  assert.equal(worker.messages.length, 3);
+  assertLegalPreview(client.html);
+  client.home();
+  client.previewVisible(true);
+  const restarted = client.workers[1];
+  assert.ok(restarted.messages[0].generation > worker.messages[0].generation);
+  client.pageHide();
+  assert.equal(restarted.terminated, true);
+  client.advance(5000);
+  assert.equal(restarted.messages.length, 1);
+});
+
+test('homepage animation falls back without motion support and holds a finished game before reseeding', () => {
+  const reduced = browser({ previewWorker: true, reducedMotion: true });
+  assert.equal(reduced.workers.length, 0);
+  assertLegalPreview(reduced.html);
+  const unsupported = browser();
+  assertLegalPreview(unsupported.html);
+  const client = browser({ previewWorker: true });
+  client.previewVisible(true);
+  const worker = client.workers[0];
+  assert.ok(worker, 'A visible homepage must start its isolated game worker.');
+  const frame = previewFrame(createGame(players, { seed: 1 }));
+  frame.status = 'finished';
+  frame.winnerId = 'p0';
+  worker.reply(frame);
+  client.advance(2499);
+  assert.equal(worker.messages.length, 1);
+  client.advance(1);
+  assert.equal(worker.messages[1].type, 'start');
+  assert.ok(worker.messages[1].generation > worker.messages[0].generation);
+  worker.reply(previewFrame(createGame(players, { seed: 2 })));
+  assert.ok([...client.previewPawns.values()].every(pawn => !pawn.className.includes('demo-pawn-moving')));
+  client.motion(true);
+  assert.equal(worker.terminated, true);
+  client.advance(5000);
+  assert.equal(worker.messages.length, 2);
+  client.motion(false);
+  client.previewVisible(true);
+  const failed = client.workers[1];
+  failed.onerror(new Error('Unavailable worker'));
+  assert.equal(failed.terminated, true);
+  client.advance(5000);
+  assert.equal(client.workers.length, 2, 'An unavailable worker must not retry in a loop.');
 });

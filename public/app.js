@@ -70,6 +70,17 @@ let placingTimer = null;
 const forgottenTiles = new Map();
 const reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)');
 let forgettingTimer = null;
+let demoWorker = null;
+let demoFrame = null;
+let demoGeneration = 0;
+let demoTimer = null;
+let demoObserver = null;
+let demoElement = null;
+let demoVisible = true;
+let demoPaused = false;
+let demoFailed = false;
+let demoPending = false;
+let demoPageHidden = false;
 
 function clearGameMotions() {
   clearTimeout(gameMotionTimer);
@@ -338,8 +349,7 @@ function trackForgottenTiles(previous, next) {
   scheduleForgottenCleanup();
 }
 
-function forgottenTileMarkup(index) {
-  const item = forgottenTiles.get(index);
+function forgottenTileMarkup(index, item = forgottenTiles.get(index)) {
   if (!item || reducedMotion.matches) return '';
   const elapsed = Math.max(0, Math.round(performance.now() - item.startedAt));
   if (elapsed >= FORGET_DURATION) return '';
@@ -348,6 +358,8 @@ function forgottenTileMarkup(index) {
 }
 
 reducedMotion.addEventListener('change', () => {
+  if (reducedMotion.matches) stopHomepagePreview(false);
+  else syncHomepagePreview();
   if (reducedMotion.matches && (forgottenTiles.size || placedTiles.size || travelEffects.size || drawnTiles.size || victoryEffect || [...tileRotations.values()].some(item => item.startedAt !== null))) {
     clearForgottenTiles();
     clearPlacedTiles();
@@ -470,9 +482,189 @@ function previewBoard() {
   return `<div class="preview-shell"><div class="preview-grid">${layout.map((tile, index) => `<div class="preview-cell ${tile ? '' : 'empty'}" data-preview-cell="${index}"><img src="assets/${tile ? tile[0] : 'hedge.webp'}" style="transform:rotate(${tile ? tile[1] * 90 : 0}deg)" alt="" draggable="false">${gardens[index] ? gardenFlowersMarkup(gardens[index], gardenStock(gardens[index], players)) : ''}${players.filter(player => player.position === index).map(player => previewPawnMarkup(player, tile)).join('')}</div>`).join('')}</div></div>`;
 }
 
+function demoPawnPoint(frame, player) {
+  const lane = pawnLane(frame.board[player.position], player.entry);
+  const companions = frame.players.filter(other => other.position === player.position && (pawnLane(frame.board[other.position], other.entry)?.key || '') === (lane?.key || ''));
+  const shift = (companions.findIndex(other => other.id === player.id) - (companions.length - 1) / 2) * 19;
+  return { x: (player.position % 5 * 100 + (lane?.x ?? 50) + shift) / 5, y: (Math.floor(player.position / 5) * 100 + (lane?.y ?? 50) + 5) / 5 };
+}
+
+function demoCellsMarkup(frame, previous) {
+  return frame.board.map((tile, index) => {
+    const before = previous?.board[index];
+    const placed = tile && tile.kind !== 'garden' && previous && before?.id !== tile.id;
+    const rotated = tile && before?.id === tile.id && before.rotation !== tile.rotation;
+    const angle = (tile?.rotation || 0) * 90;
+    const from = (before?.rotation || 0) * 90;
+    const delta = ((angle - from + 540) % 360) - 180;
+    const motion = placed ? 'placed-tile' : rotated ? 'rotating-tile' : '';
+    const overgrowth = !tile && before ? forgottenTileMarkup(index, { tile: before, startedAt: performance.now() }) : '';
+    return `<div class="preview-cell ${tile ? '' : 'empty'}" data-preview-cell="${index}"><img class="${motion}" src="assets/${escapeHtml(tile?.asset || 'hedge.webp')}" style="transform:rotate(${angle}deg)${rotated ? `;--rotate-from:${from}deg;--rotate-to:${from + delta}deg` : ''}" alt="" draggable="false">${overgrowth}${tile?.kind === 'garden' ? gardenFlowersMarkup(tile.color, gardenStock(tile.color, frame.players)) : ''}</div>`;
+  }).join('');
+}
+
+function demoPawnsMarkup(frame) {
+  return frame.players.map(player => {
+    const point = demoPawnPoint(frame, player);
+    return `<span class="preview-pawn demo-pawn" data-demo-pawn="${escapeHtml(player.id)}" data-color="${player.color}" data-entry="${player.entry ?? ''}" style="--pawn:${colors[player.color]};left:${point.x}%;top:${point.y}%"></span>`;
+  }).join('');
+}
+
+function demoBoardMarkup(frame) {
+  return `<div class="preview-shell live-preview"><div class="preview-playfield"><div class="preview-grid">${demoCellsMarkup(frame)}</div><div class="preview-pawns" aria-hidden="true">${demoPawnsMarkup(frame)}</div></div></div>`;
+}
+
+function updateDemoControl() {
+  const element = main.querySelector('#homepage-preview');
+  const button = element?.querySelector('[data-demo-pause]');
+  const paused = demoPaused || document.hidden || !demoVisible || reducedMotion.matches;
+  element?.classList.toggle('preview-paused', paused);
+  if (button) {
+    button.hidden = reducedMotion.matches || demoFailed || !demoWorker && !demoFrame;
+    button.setAttribute('aria-label', demoPaused ? 'Wznów animację planszy' : 'Wstrzymaj animację planszy');
+    button.setAttribute('aria-pressed', String(demoPaused));
+    button.textContent = demoPaused ? '▶' : 'Ⅱ';
+  }
+}
+
+function paintDemoFrame(frame, previous) {
+  const element = main.querySelector('#homepage-preview');
+  if (!element || room) return;
+  const board = element.querySelector('[data-demo-board]');
+  const grid = board?.querySelector('.preview-grid');
+  const overlay = board?.querySelector('.preview-pawns');
+  if (!grid || !overlay || !previous) {
+    if (board) board.innerHTML = demoBoardMarkup(frame);
+  } else {
+    grid.innerHTML = demoCellsMarkup(frame, previous);
+    for (const player of frame.players) {
+      const pawn = overlay.querySelector(`[data-demo-pawn="${CSS.escape(player.id)}"]`);
+      if (!pawn) continue;
+      const before = previous.players.find(item => item.id === player.id);
+      const point = demoPawnPoint(frame, player);
+      let style = `--pawn:${colors[player.color]};left:${point.x}%;top:${point.y}%`;
+      const moving = before && before.position !== player.position;
+      if (moving) {
+        const start = demoPawnPoint(previous, before);
+        const dx = Math.sign(player.position % 5 - before.position % 5);
+        const dy = Math.sign(Math.floor(player.position / 5) - Math.floor(before.position / 5));
+        const exit = { x: (before.position % 5 * 100 + 50 + dx * 50) / 5, y: (Math.floor(before.position / 5) * 100 + 50 + dy * 50) / 5 };
+        const entry = { x: (player.position % 5 * 100 + 50 - dx * 50) / 5, y: (Math.floor(player.position / 5) * 100 + 50 - dy * 50) / 5 };
+        style += `;--from-x:${start.x}%;--from-y:${start.y}%;--exit-x:${exit.x}%;--exit-y:${exit.y}%;--entry-x:${entry.x}%;--entry-y:${entry.y}%;--to-x:${point.x}%;--to-y:${point.y}%`;
+      }
+      pawn.style.cssText = style;
+      pawn.className = `preview-pawn demo-pawn${moving ? ' demo-pawn-moving' : ''}${frame.winnerId === player.id ? ' demo-winner' : ''}`;
+      pawn.setAttribute('data-entry', player.entry ?? '');
+    }
+  }
+  updateDemoControl();
+}
+
+function stopHomepagePreview(clear = true) {
+  clearTimeout(demoTimer);
+  demoTimer = null;
+  demoWorker?.terminate();
+  demoWorker = null;
+  demoPending = false;
+  demoGeneration++;
+  demoObserver?.disconnect();
+  demoObserver = null;
+  demoElement = null;
+  if (clear) demoFrame = null;
+  updateDemoControl();
+}
+
+function demoCanRun() {
+  return !room && !demoPaused && !demoFailed && !demoPageHidden && !document.hidden && demoVisible && !reducedMotion.matches;
+}
+
+function scheduleDemoStep() {
+  clearTimeout(demoTimer);
+  demoTimer = null;
+  updateDemoControl();
+  if (!demoCanRun() || !demoWorker || demoPending) return;
+  demoTimer = setTimeout(() => {
+    demoTimer = null;
+    if (!demoCanRun() || !demoWorker) return;
+    demoPending = true;
+    if (demoFrame?.status === 'finished') {
+      demoGeneration++;
+      demoWorker.postMessage({ type: 'start', generation: demoGeneration, seed: Math.floor(Math.random() * 0x100000000) });
+    } else demoWorker.postMessage({ type: 'step', generation: demoGeneration });
+  }, demoFrame?.status === 'finished' ? 2500 : 1400);
+}
+
+function startHomepagePreview() {
+  if (!demoCanRun() || demoWorker || typeof Worker !== 'function') return;
+  try {
+    const worker = new Worker(new URL('preview-worker.js', appBase));
+    demoWorker = worker;
+    demoGeneration++;
+    demoPending = true;
+    worker.onmessage = event => {
+      const message = event.data;
+      if (demoWorker !== worker || message?.generation !== demoGeneration || room) return;
+      if (message.type === 'error') return failDemo();
+      if (message.type !== 'frame' || !Array.isArray(message.frame?.board) || message.frame.board.length !== 25 || !Array.isArray(message.frame.players) || message.frame.players.length !== 4 || !demoPending) return;
+      demoPending = false;
+      const previous = message.action && demoCanRun() ? demoFrame : null;
+      demoFrame = message.frame;
+      paintDemoFrame(demoFrame, previous);
+      scheduleDemoStep();
+    };
+    const failDemo = () => {
+      if (demoWorker !== worker) return;
+      demoFailed = true;
+      stopHomepagePreview(false);
+    };
+    worker.onerror = failDemo;
+    worker.postMessage({ type: 'start', generation: demoGeneration, seed: Math.floor(Math.random() * 0x100000000) });
+    updateDemoControl();
+  } catch {
+    demoFailed = true;
+    stopHomepagePreview(false);
+  }
+}
+
+function syncHomepagePreview() {
+  if (room) return stopHomepagePreview();
+  const element = main.querySelector('#homepage-preview');
+  if (!element) return;
+  if (reducedMotion.matches) return stopHomepagePreview(false);
+  if (demoElement !== element) {
+    demoObserver?.disconnect();
+    demoElement = element;
+    if (typeof IntersectionObserver === 'function') {
+      demoVisible = false;
+      demoObserver = new IntersectionObserver(entries => {
+        if (demoElement !== element) return;
+        demoVisible = entries.some(entry => entry.isIntersecting);
+        if (demoVisible) startHomepagePreview();
+        scheduleDemoStep();
+      }, { threshold: 0.05 });
+      demoObserver.observe(element);
+    } else demoVisible = true;
+  }
+  startHomepagePreview();
+  scheduleDemoStep();
+}
+
+document.addEventListener('visibilitychange', () => {
+  if (!document.hidden) startHomepagePreview();
+  scheduleDemoStep();
+});
+window.addEventListener?.('pagehide', () => {
+  demoPageHidden = true;
+  stopHomepagePreview(false);
+});
+window.addEventListener?.('pageshow', () => {
+  demoPageHidden = false;
+  syncHomepagePreview();
+});
+
 function renderLanding() {
   setConnection('');
-  main.innerHTML = `<section class="landing"><div class="landing-grid"><div class="hero-copy"><form class="room-form" id="room-form"><div class="form-tabs" role="tablist" aria-label="Wybierz sposób dołączenia"><button class="form-tab ${formMode === 'create' ? 'active' : ''}" type="button" role="tab" aria-selected="${formMode === 'create'}" data-form-mode="create">Nowa rozgrywka</button><button class="form-tab ${formMode === 'join' ? 'active' : ''}" type="button" role="tab" aria-selected="${formMode === 'join'}" data-form-mode="join">Dołącz do znajomych</button></div><div class="form-fields"><div class="field"><label for="player-name">Jak Cię nazywać?</label><input id="player-name" name="name" type="text" placeholder="Twoje imię" autocomplete="nickname" maxlength="24" value="${escapeHtml(rememberedName)}" required></div>${formMode === 'join' ? `<div class="field"><label for="room-input">Kod pokoju</label><input id="room-input" name="code" type="text" placeholder="np. ABC123" autocomplete="off" autocapitalize="characters" spellcheck="false" maxlength="12" value="${escapeHtml(inviteCode)}" required></div>` : ''}</div>${formError ? `<p class="form-error" role="alert">${escapeHtml(formError)}</p>` : ''}<button class="primary-button full" type="submit" ${busy ? 'disabled' : ''}><span>${busy ? 'Łączenie…' : formMode === 'create' ? 'Stwórz pokój' : 'Wejdź do pokoju'}</span><span aria-hidden="true">↗</span></button></form></div><div class="hero-art" aria-label="Przykładowy układ planszy z oryginalnymi kafelkami">${previewBoard()}</div></div><section class="landing-rules panel" id="landing-rules" tabindex="-1" aria-labelledby="landing-rules-title"><h2 id="landing-rules-title">Zasady gry</h2>${rulesContent}</section></section>`;
+  main.innerHTML = `<section class="landing"><div class="landing-grid"><div class="hero-copy"><form class="room-form" id="room-form"><div class="form-tabs" role="tablist" aria-label="Wybierz sposób dołączenia"><button class="form-tab ${formMode === 'create' ? 'active' : ''}" type="button" role="tab" aria-selected="${formMode === 'create'}" data-form-mode="create">Nowa rozgrywka</button><button class="form-tab ${formMode === 'join' ? 'active' : ''}" type="button" role="tab" aria-selected="${formMode === 'join'}" data-form-mode="join">Dołącz do znajomych</button></div><div class="form-fields"><div class="field"><label for="player-name">Jak Cię nazywać?</label><input id="player-name" name="name" type="text" placeholder="Twoje imię" autocomplete="nickname" maxlength="24" value="${escapeHtml(rememberedName)}" required></div>${formMode === 'join' ? `<div class="field"><label for="room-input">Kod pokoju</label><input id="room-input" name="code" type="text" placeholder="np. ABC123" autocomplete="off" autocapitalize="characters" spellcheck="false" maxlength="12" value="${escapeHtml(inviteCode)}" required></div>` : ''}</div>${formError ? `<p class="form-error" role="alert">${escapeHtml(formError)}</p>` : ''}<button class="primary-button full" type="submit" ${busy ? 'disabled' : ''}><span>${busy ? 'Łączenie…' : formMode === 'create' ? 'Stwórz pokój' : 'Wejdź do pokoju'}</span><span aria-hidden="true">↗</span></button></form></div><div class="hero-art" id="homepage-preview" aria-label="Przykładowa rozgrywka czterech botów"><div data-demo-board>${demoFrame ? demoBoardMarkup(demoFrame) : previewBoard()}</div><button class="preview-toggle" type="button" data-demo-pause aria-label="Wstrzymaj animację planszy" aria-pressed="false" hidden>Ⅱ</button></div></div><section class="landing-rules panel" id="landing-rules" tabindex="-1" aria-labelledby="landing-rules-title"><h2 id="landing-rules-title">Zasady gry</h2>${rulesContent}</section></section>`;
 }
 
 function roomCodeBlock() {
@@ -652,6 +844,7 @@ function render() {
     finishTileRotations();
     positionTravelEffects();
     rendering = false;
+    syncHomepagePreview();
   }
 }
 
@@ -985,6 +1178,12 @@ main.addEventListener('submit', event => {
 main.addEventListener('click', event => {
   const button = event.target.closest('button');
   if (!button || button.disabled) return;
+  if (button.hasAttribute('data-demo-pause')) {
+    demoPaused = !demoPaused;
+    startHomepagePreview();
+    scheduleDemoStep();
+    return;
+  }
   if (button.hasAttribute('data-rules')) return showRules();
   if (button.hasAttribute('data-home')) return home();
   if (button.hasAttribute('data-share')) return void copyInvite();

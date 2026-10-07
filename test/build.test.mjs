@@ -8,7 +8,7 @@ import { buildSite, publicConfig } from '../scripts/build.mjs';
 
 const publicEnv = { SUPABASE_URL: 'https://garden.supabase.co/', SUPABASE_PUBLISHABLE_KEY: 'sb_publishable_test' };
 
-test('hosted website includes only public files, bundled SDK, and public configuration', async t => {
+test('hosted website includes only public files, bundled SDK and preview worker, and public configuration', async t => {
   const directory = await mkdtemp(path.join(tmpdir(), 'labirynt-build-'));
   t.after(() => rm(directory, { recursive: true, force: true }));
   await mkdir(path.join(directory, 'public'));
@@ -17,7 +17,7 @@ test('hosted website includes only public files, bundled SDK, and public configu
   await writeFile(path.join(directory, 'data', 'rooms.json'), 'private-game-state');
   await writeFile(path.join(directory, '.env'), 'SECRET=private-credential');
   const destination = await buildSite({ root: directory, destination: path.join(directory, 'dist'), env: { ...publicEnv, SUPABASE_ACCESS_TOKEN: 'private-credential' } });
-  assert.deepEqual((await readdir(destination)).sort(), ['.nojekyll', 'config.js', 'index.html', 'vendor']);
+  assert.deepEqual((await readdir(destination)).sort(), ['.nojekyll', 'config.js', 'index.html', 'preview-worker.js', 'vendor']);
   const window = {};
   const config = await readFile(path.join(destination, 'config.js'), 'utf8');
   runInNewContext(config, { window });
@@ -26,6 +26,13 @@ test('hosted website includes only public files, bundled SDK, and public configu
   assert.equal(window.LABIRYNT_CONFIG.publishableKey, publicEnv.SUPABASE_PUBLISHABLE_KEY);
   assert.ok(!config.includes('private-credential'));
   assert.ok((await readFile(path.join(destination, 'vendor', 'supabase.js'), 'utf8')).includes('createClient'));
+  const frames = [];
+  const self = { postMessage: message => frames.push(message) };
+  runInNewContext(await readFile(path.join(destination, 'preview-worker.js'), 'utf8'), { self, structuredClone });
+  self.onmessage({ data: { type: 'start', generation: 1, seed: 42 } });
+  assert.equal(frames.length, 1);
+  assert.equal(frames[0].type, 'frame');
+  assert.equal(frames[0].frame.players.length, 4);
 });
 
 test('website build rejects privileged keys and missing backend configuration', () => {

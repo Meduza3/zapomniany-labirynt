@@ -2,6 +2,7 @@ import { cp, mkdir, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { build } from 'esbuild';
+import { buildPreview } from './build-preview.mjs';
 
 const projectRoot = fileURLToPath(new URL('../', import.meta.url));
 
@@ -28,6 +29,7 @@ export async function buildSite({ env = process.env, root = projectRoot, destina
   await rm(destination, { recursive: true, force: true });
   await mkdir(destination, { recursive: true });
   await cp(path.join(root, 'public'), destination, { recursive: true });
+  await buildPreview({ destination: path.join(destination, 'preview-worker.js') });
   await writeFile(path.join(destination, 'config.js'), `window.LABIRYNT_CONFIG = ${JSON.stringify(config)};\n`);
   await writeFile(path.join(destination, '.nojekyll'), '');
   await build({

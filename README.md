@@ -135,7 +135,9 @@ Verified on Node.js 22.18.0: the automated rule, bot, browser-controller, server
 
 Automatic turn completion is covered for both action orders, blocked movement, optional tools, flower discards, bot turns, persisted state, and private multiplayer updates. A browser check confirms that entering a newly placed tile immediately starts the next player’s turn without an extra button press.
 
-Welcome and waiting-room previews randomly select from 16 layouts reached through legal play. Every path is visible to a pawn, and each physical tile appears at most once. A new visit or reload changes all four pawn positions; typing and lobby updates keep the current preview still. Remaining garden flowers reflect each layout.
+The welcome preview runs a fresh four-bot game using the same rules and bot decisions as multiplayer. A browser worker keeps the simulation separate from the form, and only the miniature board changes between moves. Tiles, pawns, and remaining garden flowers animate as the game advances, and a completed game starts a new one. The pause button stops play; hidden tabs and offscreen previews pause automatically. The demo stays entirely in the browser, without creating a room or saving statistics.
+
+The waiting room, reduced-motion mode, and browsers without worker support use a static preview selected from 16 layouts reached through legal play. Every path is visible to a pawn, each physical tile appears at most once, and garden flowers reflect the layout. Typing and lobby updates preserve the selected scene. Run `npm run build:preview` after changing the engine or bots to refresh the local worker bundle; the hosted build does this automatically.
 
 The welcome page includes the complete rules below the form and preview, with two columns on desktop and one on phones. Its header rules button scrolls to the section; rooms retain the rules dialog.
 
@@ -143,7 +145,7 @@ At phone widths, the hand and touch rotation control sit directly below the boar
 
 Placement tests verify per-square preview orientations, exact single-click submissions, keyboard and wheel rotation, mixed mouse/keyboard focus, wheel throttling, and cancellation. Browser checks confirmed repeated rotation and a one-click placement at the displayed 270° orientation.
 
-Browser-controller tests validate all 16 layouts on both screens and preview stability across form changes, lobby updates, navigation, and reload. They also exercise animation timing, repeated and stale multiplayer updates, interrupted renders, replacement tiles, navigation, and reduced-motion changes. They use a separate client test file because the rules and HTTP suites do not execute the browser controller.
+Browser-controller tests validate all 16 fallback layouts, preview stability, and the animated preview's worker lifecycle. They also exercise animation timing, repeated and stale multiplayer updates, interrupted renders, replacement tiles, navigation, and reduced-motion changes. They use a separate client test file because the rules and HTTP suites do not execute the browser controller. Preview worker tests cover legal bot play and the bundled browser protocol separately from the UI.
 
 Engine and bot tests use Node's built-in runner for fast feedback. Bot decision tests have a separate file because choosing a move is distinct from validating the game rules. Server tests use real local HTTP connections and temporary persistent storage to verify room privacy, multiplayer updates, action validation, and recovery without faking the behavior under test.
 
